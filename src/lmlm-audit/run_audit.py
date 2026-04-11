@@ -1,4 +1,5 @@
 import argparse
+import html
 import json
 import os
 import re
@@ -8,8 +9,9 @@ from tqdm import tqdm
 
 
 from prompting import load_prompts
-from metrics import summarize_results
+from metrics import metrics_total
 from database_states import DatabaseState, build_state_db_manager, retrieval_enabled
+from equivalence import prompt_row_aliases
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -20,6 +22,9 @@ LOOKUP_VALUE_PATTERN = re.compile(
     r"<\|db_entity\|>.*?<\|db_relationship\|>.*?<\|db_return\|>\s*(.*?)\s*<\|db_end\|>",
     re.DOTALL,
 )
+DB_MARKUP_SPAN_PATTERN = re.compile(r"<\|db_[^|]+\|>.*?<\|db_end\|>", re.DOTALL)
+DB_SPECIAL_TOKEN_PATTERN = re.compile(r"<\|db_[^|]+\|>")
+HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
 
 
 def prepare_prompt(prompt_text: str) -> str:
@@ -49,6 +54,10 @@ def clean_answer(answer_text: str) -> str:
         if marker in answer_text:
             answer_text = answer_text.split(marker, 1)[0].strip()
 
+    answer_text = html.unescape(answer_text)
+    answer_text = DB_MARKUP_SPAN_PATTERN.sub(" ", answer_text)
+    answer_text = DB_SPECIAL_TOKEN_PATTERN.sub(" ", answer_text)
+    answer_text = HTML_TAG_PATTERN.sub(" ", answer_text)
     answer_text = re.sub(r"\s+", " ", answer_text).strip()
     answer_text = answer_text.strip(" \t\n\r\"'`")
 
@@ -196,6 +205,21 @@ def generate_answer(
     return final_output
 
 
+def _default_retrieval_trace(state: DatabaseState) -> dict[str, Any]:
+    return {
+        "state": state.value,
+        "retrieval_enabled": retrieval_enabled(state),
+        "lookup_query": None,
+        "threshold": None,
+        "all_candidates": [],
+        "deleted_candidates": [],
+        "retained_candidates": [],
+        "selected_candidate": None,
+        "selected_value": None,
+        "error": None,
+    }
+
+
 def run_prompt_audit(
     base_db_manager: Any,
     model: Any,
@@ -209,6 +233,9 @@ def run_prompt_audit(
         prompt_row=prompt_row,
         state=state,
     )
+    if hasattr(model.db_manager, "reset_trace"):
+        model.db_manager.reset_trace()
+
     answer = generate_answer(
         model=model,
         tokenizer=tokenizer,
@@ -216,15 +243,20 @@ def run_prompt_audit(
         max_new_tokens=max_new_tokens,
         enable_dblookup=retrieval_enabled(state),
     )
+    retrieval_trace = getattr(model.db_manager, "last_trace", None)
 
     return {
         "fact_id": prompt_row["fact_id"],
         "subject": prompt_row["subject"],
+        "subject_aliases": list(prompt_row_aliases(prompt_row, "subject")),
         "relation": prompt_row["relation"],
+        "relation_aliases": list(prompt_row_aliases(prompt_row, "relation")),
         "state": state.value,
         "prompt": prompt_row["prompt_text"],
         "ground_truth": prompt_row["gold_object"],
+        "object_aliases": list(prompt_row_aliases(prompt_row, "object")),
         "model_output": answer,
+        "retrieval_trace": retrieval_trace or _default_retrieval_trace(state),
     }
 
 
@@ -290,7 +322,8 @@ def log_metrics_to_wandb(
     wandb_module: Any,
     prompt_path: Path,
     state: DatabaseState,
-    metrics: dict[str, float],
+    state_metrics: dict[str, float],
+    cross_state_metrics: dict[str, float],
     model_name: str,
     database_path: Path,
     max_new_tokens: int,
@@ -308,10 +341,14 @@ def log_metrics_to_wandb(
             "max_new_tokens": max_new_tokens,
             "limit": limit,
         },
-        reinit=True,
+        reinit="finish_previous",
     )
-    run.log(metrics)
-    run.summary.update(metrics)
+    metrics_payload = {
+        **{f"state/{key}": value for key, value in state_metrics.items()},
+        **{f"cross_state/{key}": value for key, value in cross_state_metrics.items()},
+    }
+    run.log(metrics_payload)
+    run.summary.update(metrics_payload)
     run.finish()
 
 
@@ -413,13 +450,24 @@ def main() -> None:
 
         output_path = args.output_dir / f"{prompt_path.stem}_results.jsonl"
         save_results(results, output_path)
+        total_metrics = metrics_total(results)
         metrics_by_state = {
-            state.value: summarize_results(
+            state.value: metrics_total(
                 [result for result in results if result["state"] == state.value]
             )
             for state in states
         }
 
+        print("Cross-state audit metrics:")
+        print(f"  Paired count: {total_metrics['paired_count']}")
+        print(f"  Parametric leakage L(f): {total_metrics['parametric_leakage']:.3f}")
+        print(
+            "  Retrieval-mediated correctness R(f): "
+            f"{total_metrics['retrieval_mediated_correctness']:.3f}"
+        )
+        print(
+            f"  Retrieval artifact rate: {total_metrics['retrieval_artifact_rate']:.3f}"
+        )
         print("Metrics by state:")
         for state in states:
             metrics = metrics_by_state[state.value]
@@ -431,12 +479,20 @@ def main() -> None:
             print(f"  Precision: {metrics['precision']:.3f}")
             print(f"  Recall: {metrics['recall']:.3f}")
             print(f"  F1: {metrics['f1']:.3f}")
+            print(f"  Parametric leakage L(f): {metrics['parametric_leakage']:.3f}")
+            print(
+                f"  Retrieval-mediated correctness R(f): {metrics['retrieval_mediated_correctness']:.3f}"
+            )
+            print(
+                f"  Retrieval artifact rate: {metrics['retrieval_artifact_rate']:.3f}"
+            )
             if wandb_module is not None:
                 log_metrics_to_wandb(
                     wandb_module=wandb_module,
                     prompt_path=prompt_path,
                     state=state,
-                    metrics=metrics,
+                    state_metrics=metrics,
+                    cross_state_metrics=total_metrics,
                     model_name=args.model_name,
                     database_path=args.database_path,
                     max_new_tokens=args.max_new_tokens,

@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from equivalence import prompt_row_aliases, values_equivalent
+
 
 LOOKUP_PATTERNS = [
     r"\[dblookup\('((?:[^'\\]|\\.)+)',\s*'((?:[^'\\]|\\.)+)'\)\s*->",
@@ -21,8 +23,11 @@ class DatabaseState(str, Enum):
 class TargetFact:
     fact_id: int | None
     subject: str
+    subject_aliases: tuple[str, ...]
     relation: str
+    relation_aliases: tuple[str, ...]
     object: str
+    object_aliases: tuple[str, ...]
 
 
 def retrieval_enabled(state: DatabaseState) -> bool:
@@ -33,21 +38,53 @@ def target_fact_from_prompt_row(prompt_row: dict[str, Any]) -> TargetFact:
     return TargetFact(
         fact_id=prompt_row.get("fact_id"),
         subject=prompt_row["subject"],
+        subject_aliases=prompt_row_aliases(prompt_row, "subject"),
         relation=prompt_row["relation"],
+        relation_aliases=prompt_row_aliases(prompt_row, "relation"),
         object=prompt_row["gold_object"],
+        object_aliases=prompt_row_aliases(prompt_row, "object"),
     )
-
-
-def _normalize_field(text: str) -> str:
-    return text.strip().casefold()
 
 
 def is_deleted_triplet(triplet: tuple[str, str, str], target_fact: TargetFact) -> bool:
     subject, relation, obj = triplet
     return (
-        _normalize_field(subject) == _normalize_field(target_fact.subject)
-        and _normalize_field(relation) == _normalize_field(target_fact.relation)
-        and _normalize_field(obj) == _normalize_field(target_fact.object)
+        values_equivalent(subject, target_fact.subject, right_aliases=target_fact.subject_aliases)
+        and values_equivalent(
+            relation,
+            target_fact.relation,
+            right_aliases=target_fact.relation_aliases,
+        )
+        and values_equivalent(obj, target_fact.object, right_aliases=target_fact.object_aliases)
+    )
+
+
+def candidate_supports_target_fact(
+    triplet: tuple[str, str, str],
+    target_fact: TargetFact,
+) -> tuple[bool, bool, bool, bool]:
+    subject, relation, obj = triplet
+    matches_subject = values_equivalent(
+        subject,
+        target_fact.subject,
+        right_aliases=target_fact.subject_aliases,
+    )
+    matches_relation = values_equivalent(
+        relation,
+        target_fact.relation,
+        right_aliases=target_fact.relation_aliases,
+    )
+    matches_object = values_equivalent(
+        obj,
+        target_fact.object,
+        right_aliases=target_fact.object_aliases,
+    )
+    supports_target_fact = matches_subject and matches_relation and matches_object
+    return (
+        matches_subject,
+        matches_relation,
+        matches_object,
+        supports_target_fact,
     )
 
 
@@ -122,37 +159,135 @@ class AuditDatabaseManager:
         self.database_org_file = getattr(base_db_manager, "database_org_file", [])
         self.database = getattr(base_db_manager, "database", {})
         self.topk_retriever = getattr(base_db_manager, "topk_retriever", None)
+        self.last_trace: dict[str, Any] | None = None
 
     def init_topk_retriever(self, *args: Any, **kwargs: Any) -> None:
         if getattr(self.base_db_manager, "topk_retriever", None) is None:
             self.base_db_manager.init_topk_retriever(*args, **kwargs)
         self.topk_retriever = self.base_db_manager.topk_retriever
 
+    def reset_trace(self) -> None:
+        self.last_trace = None
+
+    def _candidate_trace_entry(
+        self,
+        candidate: tuple[str, str, str, float],
+    ) -> dict[str, Any]:
+        subject, relation, obj, score = candidate
+        matches_subject = False
+        matches_relation = False
+        matches_object = False
+        supports_target_fact = False
+        if self.target_fact is not None:
+            (
+                matches_subject,
+                matches_relation,
+                matches_object,
+                supports_target_fact,
+            ) = candidate_supports_target_fact(candidate[:3], self.target_fact)
+
+        return {
+            "subject": subject,
+            "relation": relation,
+            "object": obj,
+            "score": score,
+            "matches_subject": matches_subject,
+            "matches_relation": matches_relation,
+            "matches_object": matches_object,
+            "supports_target_fact": supports_target_fact,
+            "matches_deleted_fact": (
+                self.target_fact is not None and is_deleted_triplet(candidate[:3], self.target_fact)
+            ),
+        }
+
     def retrieve_from_database(self, prompt: str, threshold: float | None = None) -> str:
-        if self.state is DatabaseState.FULL or self.target_fact is None:
-            return self.base_db_manager.retrieve_from_database(prompt, threshold=threshold)
+        trace: dict[str, Any] = {
+            "state": self.state.value,
+            "retrieval_enabled": True,
+            "lookup_query": None,
+            "threshold": threshold,
+            "all_candidates": [],
+            "deleted_candidates": [],
+            "retained_candidates": [],
+            "selected_candidate": None,
+            "selected_value": None,
+            "error": None,
+        }
+        is_passthrough_state = self.state is DatabaseState.FULL or self.target_fact is None
 
-        entity, relationship = extract_lookup_query(prompt)
-        self.init_topk_retriever()
-        candidates = retrieve_triplet_candidates(
-            self.topk_retriever,
-            entity=entity,
-            relation=relationship,
-            threshold=threshold,
-        )
+        try:
+            entity, relationship = extract_lookup_query(prompt)
+            trace["lookup_query"] = {
+                "entity": entity.strip(),
+                "relation": relationship.strip(),
+            }
 
-        remaining_candidates = [
-            candidate
-            for candidate in candidates
-            if not is_deleted_triplet(candidate[:3], self.target_fact)
+            self.init_topk_retriever()
+            candidates = retrieve_triplet_candidates(
+                self.topk_retriever,
+                entity=entity,
+                relation=relationship,
+                threshold=threshold,
+            )
+            trace["all_candidates"] = [
+                self._candidate_trace_entry(candidate) for candidate in candidates
+            ]
+        except Exception as exc:
+            trace["error"] = str(exc)
+            if is_passthrough_state:
+                value = self.base_db_manager.retrieve_from_database(prompt, threshold=threshold)
+                trace["selected_value"] = value
+                self.last_trace = trace
+                return value
+            self.last_trace = trace
+            raise
+
+        if is_passthrough_state:
+            value = self.base_db_manager.retrieve_from_database(prompt, threshold=threshold)
+            trace["retained_candidates"] = trace["all_candidates"]
+            trace["selected_value"] = value
+
+            selected_candidate = next(
+                (
+                    candidate
+                    for candidate in trace["retained_candidates"]
+                    if candidate["object"] == value
+                ),
+                None,
+            )
+            trace["selected_candidate"] = selected_candidate
+            self.last_trace = trace
+            return value
+
+        remaining_candidates: list[tuple[str, str, str, float]] = []
+        deleted_candidates: list[tuple[str, str, str, float]] = []
+        for candidate in candidates:
+            if is_deleted_triplet(candidate[:3], self.target_fact):
+                deleted_candidates.append(candidate)
+            else:
+                remaining_candidates.append(candidate)
+
+        trace["deleted_candidates"] = [
+            self._candidate_trace_entry(candidate) for candidate in deleted_candidates
+        ]
+        trace["retained_candidates"] = [
+            self._candidate_trace_entry(candidate) for candidate in remaining_candidates
         ]
 
         if not remaining_candidates:
-            raise ValueError(
+            trace["error"] = (
                 f"No retrieval results for entity={entity!r}, relationship={relationship!r}"
             )
+            self.last_trace = trace
+            raise ValueError(
+                trace["error"]
+            )
 
-        return remaining_candidates[0][2]
+        selected_candidate = remaining_candidates[0]
+        trace["selected_candidate"] = self._candidate_trace_entry(selected_candidate)
+        trace["selected_value"] = selected_candidate[2]
+        self.last_trace = trace
+        return selected_candidate[2]
 
 
 def build_state_db_manager(
@@ -160,9 +295,6 @@ def build_state_db_manager(
     prompt_row: dict[str, Any],
     state: DatabaseState,
 ) -> Any:
-    if state is DatabaseState.FULL:
-        return base_db_manager
-
     return AuditDatabaseManager(
         base_db_manager=base_db_manager,
         state=state,

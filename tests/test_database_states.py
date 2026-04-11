@@ -8,6 +8,7 @@ from database_states import (
     AuditDatabaseManager,
     DatabaseState,
     TargetFact,
+    candidate_supports_target_fact,
     extract_lookup_query,
     is_deleted_triplet,
     retrieval_enabled,
@@ -38,7 +39,7 @@ class FakeRetriever:
             distances=[0.95, 0.90, 0.80],
         )
         self.id_to_triplet = {
-            0: ("Hexol", "First Described By", "Jørgensen"),
+            0: ("Hexol", "First Described By", "Jorgensen"),
             1: ("Hexol", "Structure Recognized By", "Werner"),
             2: ("Jocelyne Girard-Bujold", "Term End", "2004"),
         }
@@ -59,7 +60,7 @@ class FakeBaseManager:
         return None
 
     def retrieve_from_database(self, _prompt: str, threshold=None) -> str:
-        return "Jørgensen"
+        return "Jorgensen"
 
 
 def test_retrieval_enabled() -> None:
@@ -80,12 +81,15 @@ def test_is_deleted_triplet() -> None:
     target_fact = TargetFact(
         fact_id=10,
         subject="Hexol",
+        subject_aliases=(),
         relation="First Described By",
+        relation_aliases=(),
         object="Jørgensen",
+        object_aliases=("Jorgensen",),
     )
     assert (
         is_deleted_triplet(
-            ("Hexol", "First Described By", "Jørgensen"),
+            ("Hexol", "First Described By", "Jorgensen"),
             target_fact,
         )
         is True
@@ -99,13 +103,37 @@ def test_is_deleted_triplet() -> None:
     )
 
 
+def test_candidate_supports_target_fact_flags() -> None:
+    target_fact = TargetFact(
+        fact_id=10,
+        subject="Hexol",
+        subject_aliases=(),
+        relation="First Described By",
+        relation_aliases=(),
+        object="Jørgensen",
+        object_aliases=("Jorgensen",),
+    )
+
+    assert candidate_supports_target_fact(
+        ("Hexol", "First Described By", "Jorgensen"),
+        target_fact,
+    ) == (True, True, True, True)
+    assert candidate_supports_target_fact(
+        ("Hexol", "Structure Recognized By", "Jorgensen"),
+        target_fact,
+    ) == (True, False, True, False)
+
+
 def test_audit_database_manager_filters_deleted_fact() -> None:
     base_manager = FakeBaseManager()
     target_fact = TargetFact(
         fact_id=10,
         subject="Hexol",
+        subject_aliases=(),
         relation="First Described By",
+        relation_aliases=(),
         object="Jørgensen",
+        object_aliases=("Jorgensen",),
     )
     audit_manager = AuditDatabaseManager(
         base_db_manager=base_manager,
@@ -117,3 +145,42 @@ def test_audit_database_manager_filters_deleted_fact() -> None:
         "<|db_entity|>Hexol<|db_relationship|>First Described By<|db_return|>"
     )
     assert value == "Werner"
+    assert audit_manager.last_trace is not None
+    assert audit_manager.last_trace["lookup_query"] == {
+        "entity": "Hexol",
+        "relation": "First Described By",
+    }
+    assert len(audit_manager.last_trace["all_candidates"]) == 3
+    assert len(audit_manager.last_trace["deleted_candidates"]) == 1
+    assert audit_manager.last_trace["deleted_candidates"][0]["object"] == "Jorgensen"
+    assert audit_manager.last_trace["deleted_candidates"][0]["matches_subject"] is True
+    assert audit_manager.last_trace["deleted_candidates"][0]["matches_relation"] is True
+    assert audit_manager.last_trace["deleted_candidates"][0]["matches_object"] is True
+    assert audit_manager.last_trace["deleted_candidates"][0]["supports_target_fact"] is True
+    assert audit_manager.last_trace["selected_candidate"]["matches_relation"] is False
+    assert audit_manager.last_trace["selected_candidate"]["supports_target_fact"] is False
+    assert audit_manager.last_trace["selected_value"] == "Werner"
+
+
+def test_full_state_falls_back_to_base_manager_when_trace_parse_fails() -> None:
+    base_manager = FakeBaseManager()
+    target_fact = TargetFact(
+        fact_id=10,
+        subject="Hexol",
+        subject_aliases=(),
+        relation="First Described By",
+        relation_aliases=(),
+        object="Jørgensen",
+        object_aliases=("Jorgensen",),
+    )
+    audit_manager = AuditDatabaseManager(
+        base_db_manager=base_manager,
+        state=DatabaseState.FULL,
+        target_fact=target_fact,
+    )
+
+    value = audit_manager.retrieve_from_database("not a dblookup prompt")
+    assert value == "Jorgensen"
+    assert audit_manager.last_trace is not None
+    assert audit_manager.last_trace["error"] is not None
+    assert audit_manager.last_trace["selected_value"] == "Jorgensen"
