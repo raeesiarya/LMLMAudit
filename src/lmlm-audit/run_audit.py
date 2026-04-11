@@ -8,7 +8,6 @@ from typing import Any
 from tqdm import tqdm
 
 
-from prompting import load_prompts
 from metrics import metrics_total
 from database_states import DatabaseState, build_state_db_manager, retrieval_enabled
 from equivalence import prompt_row_aliases
@@ -25,6 +24,11 @@ LOOKUP_VALUE_PATTERN = re.compile(
 DB_MARKUP_SPAN_PATTERN = re.compile(r"<\|db_[^|]+\|>.*?<\|db_end\|>", re.DOTALL)
 DB_SPECIAL_TOKEN_PATTERN = re.compile(r"<\|db_[^|]+\|>")
 HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
+
+
+def load_prompts(prompts_path: Path) -> list[dict[str, Any]]:
+    with prompts_path.open("r", encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
 
 
 def prepare_prompt(prompt_text: str) -> str:
