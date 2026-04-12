@@ -23,12 +23,6 @@ install_claude() {
   npm install -g @anthropic-ai/claude-code
 }
 
-install_ruflo() {
-  require_command npm
-  log "Installing Ruflo (claude-flow CLI) via npm"
-  npm install -g @claude-flow/cli@latest
-}
-
 require_command node
 require_command npm
 
@@ -38,12 +32,10 @@ else
   log "Claude Code is already installed: $(claude --version)"
 fi
 
-if ! command -v claude-flow >/dev/null 2>&1 && \
-   ! npm list -g @claude-flow/cli >/dev/null 2>&1; then
-  install_ruflo
-else
-  log "Ruflo (claude-flow) is already installed"
-fi
+log "Checking Ruflo (claude-flow CLI) availability via npx"
+npx -y @claude-flow/cli@latest --version >/dev/null
+log "Ruflo (claude-flow CLI) is available through npx"
+log "Note: this does not create a permanent global 'claude-flow' binary"
 
 if [[ -f "${REPO_ROOT}/.mcp.json" ]]; then
   log "Project MCP configuration already exists at .mcp.json"
@@ -57,7 +49,7 @@ cat <<'EOF'
 
 Next steps:
   1. Run `claude` once to authenticate if you have not already.
-  2. Optional: start the Claude Flow daemon with:
+  2. Ruflo is available through npx on demand, for example:
        npx -y @claude-flow/cli@latest daemon start
   3. Optional: verify MCP visibility with:
        claude mcp list
