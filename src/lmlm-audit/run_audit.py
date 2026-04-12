@@ -3,6 +3,8 @@ import html
 import json
 import os
 import re
+from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from tqdm import tqdm
@@ -15,7 +17,9 @@ from equivalence import prompt_row_aliases
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PROMPT_DIR = Path("data/prompts")
+DEFAULT_CUSTOM_DATABASE_DIR = Path("data/custom_databases")
 DEFAULT_OUTPUT_DIR = Path("outputs/audit")
+DEFAULT_DATABASE_PATH = Path("data/lmlm_database.json")
 WANDB_PROJECT = "lmlm-audit"
 LOOKUP_VALUE_PATTERN = re.compile(
     r"<\|db_entity\|>.*?<\|db_relationship\|>.*?<\|db_return\|>\s*(.*?)\s*<\|db_end\|>",
@@ -306,6 +310,79 @@ def save_results(results: list[dict[str, Any]], output_path: Path) -> None:
             f.write("\n")
 
 
+@dataclass(frozen=True)
+class AuditJob:
+    prompt_path: Path
+    database_path: Path
+    output_path: Path
+
+
+def discover_custom_audit_jobs(output_dir: Path) -> list[AuditJob]:
+    jobs: list[AuditJob] = []
+    for domain_dir in sorted(
+        path for path in DEFAULT_CUSTOM_DATABASE_DIR.iterdir() if path.is_dir()
+    ):
+        prompts_root = domain_dir / "prompts"
+        if not prompts_root.exists():
+            continue
+
+        for variant_dir in sorted(
+            path for path in prompts_root.iterdir() if path.is_dir()
+        ):
+            database_path = domain_dir / f"{variant_dir.name}.json"
+            if not database_path.exists():
+                continue
+
+            for prompt_path in sorted(variant_dir.glob("*.jsonl")):
+                jobs.append(
+                    AuditJob(
+                        prompt_path=prompt_path,
+                        database_path=database_path,
+                        output_path=output_dir
+                        / domain_dir.name
+                        / variant_dir.name
+                        / f"{prompt_path.stem}_results.jsonl",
+                    )
+                )
+    return jobs
+
+
+def infer_prompt_paths_for_database(database_path: Path) -> list[Path]:
+    variant_prompt_dir = database_path.parent / "prompts" / database_path.stem
+    if variant_prompt_dir.exists():
+        return sorted(variant_prompt_dir.glob("*.jsonl"))
+    return []
+
+
+def resolve_audit_jobs(args: argparse.Namespace) -> list[AuditJob]:
+    if args.prompt_files is not None:
+        return [
+            AuditJob(
+                prompt_path=prompt_path,
+                database_path=args.database_path,
+                output_path=args.output_dir / f"{prompt_path.stem}_results.jsonl",
+            )
+            for prompt_path in args.prompt_files
+        ]
+
+    if args.database_path != DEFAULT_DATABASE_PATH:
+        inferred_prompt_paths = infer_prompt_paths_for_database(args.database_path)
+        if inferred_prompt_paths:
+            return [
+                AuditJob(
+                    prompt_path=prompt_path,
+                    database_path=args.database_path,
+                    output_path=args.output_dir
+                    / args.database_path.parent.name
+                    / args.database_path.stem
+                    / f"{prompt_path.stem}_results.jsonl",
+                )
+                for prompt_path in inferred_prompt_paths
+            ]
+
+    return discover_custom_audit_jobs(args.output_dir)
+
+
 def setup_wandb() -> Any:
     from dotenv import load_dotenv
 
@@ -333,7 +410,8 @@ def log_metrics_to_wandb(
     max_new_tokens: int,
     limit: int | None,
 ) -> None:
-    run_name = f"{prompt_path.stem}_{state.value}"
+    prompt_label = str(prompt_path.with_suffix("")).replace("/", "__")
+    run_name = f"{prompt_label}_{state.value}"
     run = wandb_module.init(
         project=WANDB_PROJECT,
         name=run_name,
@@ -363,7 +441,10 @@ def parse_args() -> argparse.Namespace:
         nargs="*",
         type=Path,
         default=None,
-        help="Specific prompt JSONL files to audit. Defaults to all files in data/prompts.",
+        help=(
+            "Specific prompt JSONL files to audit. If omitted, run all prompt files for "
+            "all custom databases under data/custom_databases."
+        ),
     )
     parser.add_argument(
         "--max-new-tokens",
@@ -392,8 +473,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--database-path",
         type=Path,
-        default=Path("data/lmlm_database.json"),
-        help="Path to the local LMLM database JSON file.",
+        default=DEFAULT_DATABASE_PATH,
+        help=(
+            "Path to a specific database JSON file. When provided without --prompt-files, "
+            "run all prompt files in the sibling prompts/<variant>/ directory if present."
+        ),
     )
     parser.add_argument(
         "--disable-dblookup",
@@ -419,90 +503,96 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    prompt_paths = (
-        sorted(DEFAULT_PROMPT_DIR.glob("*.jsonl"))
-        if args.prompt_files is None
-        else args.prompt_files
-    )
-
-    if not prompt_paths:
-        raise FileNotFoundError(f"No prompt files found in {DEFAULT_PROMPT_DIR}.")
+    jobs = resolve_audit_jobs(args)
+    if not jobs:
+        raise FileNotFoundError(
+            "No audit jobs found. Add custom prompts under data/custom_databases or "
+            "pass --prompt-files explicitly."
+        )
 
     from model_loader import load_model_and_tokenizer
 
-    model, tokenizer = load_model_and_tokenizer(
-        model_name=args.model_name,
-        database_path=args.database_path,
-    )
-    base_db_manager = model.db_manager
     state_values = [DatabaseState(state) for state in args.states]
     if args.disable_dblookup:
         state_values = [DatabaseState.DEL_OFF]
     states = state_values
     wandb_module = setup_wandb() if args.wandb_activation == "on" else None
 
-    for prompt_path in prompt_paths:
-        results = run_audit(
-            prompt_path=prompt_path,
-            base_db_manager=base_db_manager,
-            model=model,
-            tokenizer=tokenizer,
-            states=states,
-            max_new_tokens=args.max_new_tokens,
-            limit=args.limit,
-        )
+    jobs_by_database: dict[Path, list[AuditJob]] = defaultdict(list)
+    for job in jobs:
+        jobs_by_database[job.database_path].append(job)
 
-        output_path = args.output_dir / f"{prompt_path.stem}_results.jsonl"
-        save_results(results, output_path)
-        total_metrics = metrics_total(results)
-        metrics_by_state = {
-            state.value: metrics_total(
-                [result for result in results if result["state"] == state.value]
-            )
-            for state in states
-        }
+    for database_path in sorted(jobs_by_database):
+        model, tokenizer = load_model_and_tokenizer(
+            model_name=args.model_name,
+            database_path=database_path,
+        )
+        base_db_manager = model.db_manager
 
-        print("Cross-state audit metrics:")
-        print(f"  Paired count: {total_metrics['paired_count']}")
-        print(f"  Parametric leakage L(f): {total_metrics['parametric_leakage']:.3f}")
-        print(
-            "  Retrieval-mediated correctness R(f): "
-            f"{total_metrics['retrieval_mediated_correctness']:.3f}"
-        )
-        print(
-            f"  Retrieval artifact rate: {total_metrics['retrieval_artifact_rate']:.3f}"
-        )
-        print("Metrics by state:")
-        for state in states:
-            metrics = metrics_by_state[state.value]
-            print(f"{state.value}:")
-            print(f"  Count: {metrics['count']}")
-            print(f"  Exact match: {metrics['exact_match']:.3f}")
-            print(f"  Contains match: {metrics['contains_match']:.3f}")
-            print(f"  Unknown rate: {metrics['unknown_rate']:.3f}")
-            print(f"  Precision: {metrics['precision']:.3f}")
-            print(f"  Recall: {metrics['recall']:.3f}")
-            print(f"  F1: {metrics['f1']:.3f}")
-            print(f"  Parametric leakage L(f): {metrics['parametric_leakage']:.3f}")
-            print(
-                f"  Retrieval-mediated correctness R(f): {metrics['retrieval_mediated_correctness']:.3f}"
+        for job in jobs_by_database[database_path]:
+            print(f"Running audit for {job.prompt_path} with database {database_path}")
+            results = run_audit(
+                prompt_path=job.prompt_path,
+                base_db_manager=base_db_manager,
+                model=model,
+                tokenizer=tokenizer,
+                states=states,
+                max_new_tokens=args.max_new_tokens,
+                limit=args.limit,
             )
-            print(
-                f"  Retrieval artifact rate: {metrics['retrieval_artifact_rate']:.3f}"
-            )
-            if wandb_module is not None:
-                log_metrics_to_wandb(
-                    wandb_module=wandb_module,
-                    prompt_path=prompt_path,
-                    state=state,
-                    state_metrics=metrics,
-                    cross_state_metrics=total_metrics,
-                    model_name=args.model_name,
-                    database_path=args.database_path,
-                    max_new_tokens=args.max_new_tokens,
-                    limit=args.limit,
+
+            save_results(results, job.output_path)
+            total_metrics = metrics_total(results)
+            metrics_by_state = {
+                state.value: metrics_total(
+                    [result for result in results if result["state"] == state.value]
                 )
-                print(f"  W&B run: {prompt_path.stem}_{state.value}")
+                for state in states
+            }
+
+            print("Cross-state audit metrics:")
+            print(f"  Paired count: {total_metrics['paired_count']}")
+            print(
+                f"  Parametric leakage L(f): {total_metrics['parametric_leakage']:.3f}"
+            )
+            print(
+                "  Retrieval-mediated correctness R(f): "
+                f"{total_metrics['retrieval_mediated_correctness']:.3f}"
+            )
+            print(
+                f"  Retrieval artifact rate: {total_metrics['retrieval_artifact_rate']:.3f}"
+            )
+            print("Metrics by state:")
+            for state in states:
+                metrics = metrics_by_state[state.value]
+                print(f"{state.value}:")
+                print(f"  Count: {metrics['count']}")
+                print(f"  Exact match: {metrics['exact_match']:.3f}")
+                print(f"  Contains match: {metrics['contains_match']:.3f}")
+                print(f"  Unknown rate: {metrics['unknown_rate']:.3f}")
+                print(f"  Precision: {metrics['precision']:.3f}")
+                print(f"  Recall: {metrics['recall']:.3f}")
+                print(f"  F1: {metrics['f1']:.3f}")
+                print(f"  Parametric leakage L(f): {metrics['parametric_leakage']:.3f}")
+                print(
+                    f"  Retrieval-mediated correctness R(f): {metrics['retrieval_mediated_correctness']:.3f}"
+                )
+                print(
+                    f"  Retrieval artifact rate: {metrics['retrieval_artifact_rate']:.3f}"
+                )
+                if wandb_module is not None:
+                    log_metrics_to_wandb(
+                        wandb_module=wandb_module,
+                        prompt_path=job.prompt_path,
+                        state=state,
+                        state_metrics=metrics,
+                        cross_state_metrics=total_metrics,
+                        model_name=args.model_name,
+                        database_path=database_path,
+                        max_new_tokens=args.max_new_tokens,
+                        limit=args.limit,
+                    )
+                    print(f"  W&B run: {job.prompt_path.stem}_{state.value}")
 
 
 if __name__ == "__main__":
