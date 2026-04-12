@@ -1,0 +1,111 @@
+name: Claude PR Review
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  review:
+    name: Claude Diff Review
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Claude Code review
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ github.token }}
+          prompt: |
+            Review this pull request with a strict diff-first lens.
+
+            Requirements:
+            - Focus on the PR diff and likely behavioral impact.
+            - Independently consider correctness, regressions, tests, security, and maintainability, then synthesize one final report.
+            - Prefer concrete, actionable findings over general praise.
+            - Call out missing tests when relevant.
+            - If there are no material issues, say so explicitly and list residual risks briefly.
+            - Do not modify code or post comments.
+
+            Output a markdown report with:
+            - Short title
+            - High-level verdict
+            - Findings section ordered by severity
+            - Testing / risk notes
+            - Short closing summary
+          claude_args: >-
+            --model claude-sonnet-4-6
+            --max-turns 8
+
+      - name: Write review report
+        env:
+          CLAUDE_OUTPUT: ${{ steps.claude.outputs.output }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          marker = "<!-- claude-pr-review -->"
+          report = os.environ.get("CLAUDE_OUTPUT", "").strip()
+          if not report:
+              report = "Claude did not return a review report."
+
+          content = f"{marker}\n## Claude PR Review\n\n{report}\n"
+          Path("claude-pr-review.md").write_text(content, encoding="utf-8")
+          PY
+
+      - name: Upload review artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-pr-review-${{ github.event.pull_request.number }}
+          path: claude-pr-review.md
+          if-no-files-found: warn
+
+      - name: Post or update PR comment
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- claude-pr-review -->';
+            const body = fs.readFileSync('claude-pr-review.md', 'utf8');
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+
+            const existing = comments.find((comment) => comment.body && comment.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+            }
