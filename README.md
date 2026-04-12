@@ -15,6 +15,10 @@
 </p>
 
 <p align="center">
+  <img src="./badges/coverage.svg" alt="Coverage badge" />
+</p>
+
+<p align="center">
   <a href="./docs/Auditing_Forgetting_in_Limited_Memory_Language_Models.pdf">Project Proposal</a>
   |
   <a href="https://arxiv.org/abs/2505.15962">LMLM Paper</a>

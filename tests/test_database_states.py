@@ -385,6 +385,28 @@ def test_is_deleted_triplet_all_wrong() -> None:
 def test_candidate_supports_target_fact_flags() -> None:
     target_fact = _make_target_fact()
 
+
+def test_is_deleted_triplet_case_insensitive() -> None:
+    target_fact = _make_target_fact()
+    assert (
+        is_deleted_triplet(("hexol", "first described by", "jorgensen"), target_fact)
+        is True
+    )
+
+
+def test_is_deleted_triplet_all_wrong() -> None:
+    target_fact = _make_target_fact()
+    assert is_deleted_triplet(("A", "B", "C"), target_fact) is False
+
+
+# ===========================================================================
+# candidate_supports_target_fact
+# ===========================================================================
+
+
+def test_candidate_supports_target_fact_flags() -> None:
+    target_fact = _make_target_fact()
+
     assert candidate_supports_target_fact(
         ("Hexol", "First Described By", "Jorgensen"),
         target_fact,
@@ -589,9 +611,14 @@ def test_audit_database_manager_filters_deleted_fact() -> None:
     assert audit_manager.last_trace["deleted_candidates"][0]["matches_subject"] is True
     assert audit_manager.last_trace["deleted_candidates"][0]["matches_relation"] is True
     assert audit_manager.last_trace["deleted_candidates"][0]["matches_object"] is True
-    assert audit_manager.last_trace["deleted_candidates"][0]["supports_target_fact"] is True
+    assert (
+        audit_manager.last_trace["deleted_candidates"][0]["supports_target_fact"]
+        is True
+    )
     assert audit_manager.last_trace["selected_candidate"]["matches_relation"] is False
-    assert audit_manager.last_trace["selected_candidate"]["supports_target_fact"] is False
+    assert (
+        audit_manager.last_trace["selected_candidate"]["supports_target_fact"] is False
+    )
     assert audit_manager.last_trace["selected_value"] == "Werner"
 
 
