@@ -177,9 +177,7 @@ class TestTargetFact:
         assert tf.fact_id is None
 
     def test_empty_aliases(self):
-        tf = _make_target_fact(
-            subject_aliases=(), relation_aliases=(), object_aliases=()
-        )
+        tf = _make_target_fact(subject_aliases=(), relation_aliases=(), object_aliases=())
         assert tf.subject_aliases == ()
         assert tf.relation_aliases == ()
         assert tf.object_aliases == ()
@@ -343,34 +341,22 @@ def test_is_deleted_triplet_canonical_object_match() -> None:
     target_fact = _make_target_fact(object="Jørgensen", object_aliases=())
     # canonical form is "Jørgensen"; alias "Jorgensen" not present
     # but "Jørgensen" must match canonical
-    assert (
-        is_deleted_triplet(("Hexol", "First Described By", "Jørgensen"), target_fact)
-        is True
-    )
+    assert is_deleted_triplet(("Hexol", "First Described By", "Jørgensen"), target_fact) is True
 
 
 def test_is_deleted_triplet_wrong_subject() -> None:
     target_fact = _make_target_fact()
-    assert (
-        is_deleted_triplet(("Other", "First Described By", "Jorgensen"), target_fact)
-        is False
-    )
+    assert is_deleted_triplet(("Other", "First Described By", "Jorgensen"), target_fact) is False
 
 
 def test_is_deleted_triplet_wrong_relation() -> None:
     target_fact = _make_target_fact()
-    assert (
-        is_deleted_triplet(("Hexol", "Different Relation", "Jorgensen"), target_fact)
-        is False
-    )
+    assert is_deleted_triplet(("Hexol", "Different Relation", "Jorgensen"), target_fact) is False
 
 
 def test_is_deleted_triplet_wrong_object() -> None:
     target_fact = _make_target_fact()
-    assert (
-        is_deleted_triplet(("Hexol", "First Described By", "Werner"), target_fact)
-        is False
-    )
+    assert is_deleted_triplet(("Hexol", "First Described By", "Werner"), target_fact) is False
 
 
 def test_is_deleted_triplet_alias_subject() -> None:
@@ -378,12 +364,26 @@ def test_is_deleted_triplet_alias_subject() -> None:
         subject="Hexol",
         subject_aliases=("HexolAlias",),
     )
-    assert (
-        is_deleted_triplet(
-            ("HexolAlias", "First Described By", "Jorgensen"), target_fact
-        )
-        is True
-    )
+    assert is_deleted_triplet(("HexolAlias", "First Described By", "Jorgensen"), target_fact) is True
+
+
+def test_is_deleted_triplet_case_insensitive() -> None:
+    target_fact = _make_target_fact()
+    assert is_deleted_triplet(("hexol", "first described by", "jorgensen"), target_fact) is True
+
+
+def test_is_deleted_triplet_all_wrong() -> None:
+    target_fact = _make_target_fact()
+    assert is_deleted_triplet(("A", "B", "C"), target_fact) is False
+
+
+# ===========================================================================
+# candidate_supports_target_fact
+# ===========================================================================
+
+
+def test_candidate_supports_target_fact_flags() -> None:
+    target_fact = _make_target_fact()
 
 
 def test_is_deleted_triplet_case_insensitive() -> None:
@@ -861,11 +861,7 @@ def test_candidate_filtering_logged_to_wandb(wandb_run):
             import wandb
 
             fig, ax = plt.subplots()
-            ax.bar(
-                counts.keys(),
-                counts.values(),
-                color=["steelblue", "crimson", "seagreen"],
-            )
+            ax.bar(counts.keys(), counts.values(), color=["steelblue", "crimson", "seagreen"])
             ax.set_ylabel("Candidate count")
             ax.set_title("DEL-ON candidate filtering")
             plt.tight_layout()

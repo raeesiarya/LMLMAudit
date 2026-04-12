@@ -366,7 +366,9 @@ class TestPromptRowAliases:
             "gold_object_aliases": ["Spice Girls"],
         }
         result = prompt_row_aliases(row, "object")
-        spice_count = sum(1 for x in result if normalize_text(x) == "spice girls")
+        spice_count = sum(
+            1 for x in result if normalize_text(x) == "spice girls"
+        )
         assert spice_count == 1
 
     def test_none_value_for_key(self):
@@ -428,24 +430,20 @@ class TestValuesEquivalent:
         assert values_equivalent("Paris", "") is False
 
     def test_unicode_via_alias(self):
-        assert (
-            values_equivalent("Jorgensen", "Jørgensen", right_aliases=["Jorgensen"])
-            is True
-        )
+        assert values_equivalent(
+            "Jorgensen", "Jørgensen", right_aliases=["Jorgensen"]
+        ) is True
 
     def test_normalized_match_punctuation(self):
         # "Spice Girls!" normalizes same as "Spice Girls"
         assert values_equivalent("Spice Girls!", "Spice Girls") is True
 
     def test_multiple_right_aliases(self):
-        assert (
-            values_equivalent(
-                "The Beatles",
-                "Beatles",
-                right_aliases=["The Beatles", "Fab Four"],
-            )
-            is True
-        )
+        assert values_equivalent(
+            "The Beatles",
+            "Beatles",
+            right_aliases=["The Beatles", "Fab Four"],
+        ) is True
 
     def test_alias_as_tuple(self):
         assert values_equivalent("x", "y", right_aliases=("x",)) is True
@@ -460,15 +458,12 @@ class TestValuesEquivalent:
 
     def test_both_aliases_needed_for_match(self):
         # left and right have aliases; match happens through alias sets
-        assert (
-            values_equivalent(
-                "GB",
-                "Germany",
-                left_aliases=["Great Britain"],
-                right_aliases=["GB"],
-            )
-            is True
-        )
+        assert values_equivalent(
+            "GB",
+            "Germany",
+            left_aliases=["Great Britain"],
+            right_aliases=["GB"],
+        ) is True
 
     def test_number_equivalence(self):
         assert values_equivalent("42", "42") is True
@@ -547,7 +542,9 @@ def test_equivalence_matrix_logged_to_wandb(wandb_run):
             ax.set_title("values_equivalent pairwise matrix")
             plt.colorbar(im, ax=ax)
             plt.tight_layout()
-            wandb_run.log({"equivalence/equivalence_matrix": wandb.Image(fig)})
+            wandb_run.log(
+                {"equivalence/equivalence_matrix": wandb.Image(fig)}
+            )
             plt.close(fig)
         except Exception:
             pass

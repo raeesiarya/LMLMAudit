@@ -154,7 +154,9 @@ class TestCleanAnswer:
         assert result == "Paris"
 
     def test_complex_combined(self):
-        result = clean_answer('Answer: The answer is "Paris"\nQuestion: What city?')
+        result = clean_answer(
+            'Answer: The answer is "Paris"\nQuestion: What city?'
+        )
         assert result == "Paris"
 
     def test_answer_prefix_mixed_case(self):
@@ -182,25 +184,25 @@ class TestExtractLookupValues:
     )
 
     def test_single_lookup(self):
-        raw = self.TEMPLATE.format(
-            entity="Hexol", rel="First Described By", value="Jorgensen"
-        )
+        raw = self.TEMPLATE.format(entity="Hexol", rel="First Described By", value="Jorgensen")
         result = extract_lookup_values(raw)
         assert result == ["Jorgensen"]
 
     def test_multiple_distinct_lookups(self):
-        raw = self.TEMPLATE.format(
-            entity="A", rel="R", value="X"
-        ) + self.TEMPLATE.format(entity="B", rel="S", value="Y")
+        raw = (
+            self.TEMPLATE.format(entity="A", rel="R", value="X")
+            + self.TEMPLATE.format(entity="B", rel="S", value="Y")
+        )
         result = extract_lookup_values(raw)
         assert "X" in result
         assert "Y" in result
         assert len(result) == 2
 
     def test_deduplicates_repeated_value(self):
-        raw = self.TEMPLATE.format(
-            entity="A", rel="R", value="X"
-        ) + self.TEMPLATE.format(entity="A", rel="R", value="X")
+        raw = (
+            self.TEMPLATE.format(entity="A", rel="R", value="X")
+            + self.TEMPLATE.format(entity="A", rel="R", value="X")
+        )
         result = extract_lookup_values(raw)
         assert result.count("X") == 1
 
@@ -273,9 +275,7 @@ class TestChooseAnswer:
         assert answer == "First"
 
     def test_non_question_uses_postprocessed_text(self):
-        answer, source = choose_answer(
-            "Describe Paris.", "The City of Light", ["Paris"]
-        )
+        answer, source = choose_answer("Describe Paris.", "The City of Light", ["Paris"])
         assert answer == "The City of Light"
         assert source == "postprocessed_text"
 
@@ -412,7 +412,9 @@ class TestLoadPrompts:
 
     def test_skips_blank_lines(self, tmp_path):
         p = tmp_path / "prompts.jsonl"
-        p.write_text('{"id": 1}\n\n{"id": 2}\n   \n{"id": 3}\n', encoding="utf-8")
+        p.write_text(
+            '{"id": 1}\n\n{"id": 2}\n   \n{"id": 3}\n', encoding="utf-8"
+        )
         result = load_prompts(p)
         assert len(result) == 3
 
@@ -502,16 +504,9 @@ class TestDefaultRetrievalTrace:
     def test_all_keys_present(self):
         trace = _default_retrieval_trace(DatabaseState.FULL)
         expected_keys = {
-            "state",
-            "retrieval_enabled",
-            "lookup_query",
-            "threshold",
-            "all_candidates",
-            "deleted_candidates",
-            "retained_candidates",
-            "selected_candidate",
-            "selected_value",
-            "error",
+            "state", "retrieval_enabled", "lookup_query", "threshold",
+            "all_candidates", "deleted_candidates", "retained_candidates",
+            "selected_candidate", "selected_value", "error",
         }
         assert expected_keys <= set(trace.keys())
 
@@ -554,11 +549,7 @@ def test_clean_answer_processing_logged_to_wandb(wandb_run):
             ax.bar(x - width / 2, before_lens, width, label="before", color="tomato")
             ax.bar(x + width / 2, after_lens, width, label="after", color="seagreen")
             ax.set_xticks(x)
-            ax.set_xticklabels(
-                [t[:20] + "…" if len(t) > 20 else t for t in test_inputs],
-                rotation=45,
-                ha="right",
-            )
+            ax.set_xticklabels([t[:20] + "…" if len(t) > 20 else t for t in test_inputs], rotation=45, ha="right")
             ax.set_ylabel("Characters")
             ax.set_title("clean_answer: before vs after character count")
             ax.legend()

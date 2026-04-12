@@ -157,9 +157,7 @@ class TestLoadModelAndTokenizer:
         tokenizer_mock.pad_token = "x"
 
         fake_lmlm = MagicMock()
-        model_out = (
-            fake_lmlm.modeling_lmlm.LlamaForLMLM.from_pretrained_with_db.return_value
-        )
+        model_out = fake_lmlm.modeling_lmlm.LlamaForLMLM.from_pretrained_with_db.return_value
         model_out.to.return_value = model_out
 
         with (
@@ -191,9 +189,7 @@ class TestLoadModelAndTokenizer:
         tokenizer_mock.eos_token = "<eos>"
 
         fake_lmlm = MagicMock()
-        model_out = (
-            fake_lmlm.modeling_lmlm.LlamaForLMLM.from_pretrained_with_db.return_value
-        )
+        model_out = fake_lmlm.modeling_lmlm.LlamaForLMLM.from_pretrained_with_db.return_value
         model_out.to.return_value = model_out
 
         with (
@@ -224,9 +220,7 @@ class TestLoadModelAndTokenizer:
         original_pad = tokenizer_mock.pad_token
 
         fake_lmlm = MagicMock()
-        model_out = (
-            fake_lmlm.modeling_lmlm.LlamaForLMLM.from_pretrained_with_db.return_value
-        )
+        model_out = fake_lmlm.modeling_lmlm.LlamaForLMLM.from_pretrained_with_db.return_value
         model_out.to.return_value = model_out
 
         with (
@@ -258,9 +252,7 @@ class TestLoadModelAndTokenizer:
         fake_lmlm = MagicMock()
         model_mock = MagicMock()
         model_mock.to.return_value = model_mock
-        fake_lmlm.modeling_lmlm.LlamaForLMLM.from_pretrained_with_db.return_value = (
-            model_mock
-        )
+        fake_lmlm.modeling_lmlm.LlamaForLMLM.from_pretrained_with_db.return_value = model_mock
 
         with (
             patch.dict(
@@ -292,9 +284,7 @@ class TestLoadModelAndTokenizer:
         fake_lmlm = MagicMock()
         model_mock = MagicMock()
         model_mock.to.return_value = model_mock
-        fake_lmlm.modeling_lmlm.LlamaForLMLM.from_pretrained_with_db.return_value = (
-            model_mock
-        )
+        fake_lmlm.modeling_lmlm.LlamaForLMLM.from_pretrained_with_db.return_value = model_mock
 
         with (
             patch.dict(

@@ -205,9 +205,7 @@ class TestContainsMatch:
         assert contains_match("Berlin", "Paris") == 0.0
 
     def test_alias_provides_contains(self):
-        assert (
-            contains_match("UK", "United Kingdom", ground_truth_aliases=["UK"]) == 1.0
-        )
+        assert contains_match("UK", "United Kingdom", ground_truth_aliases=["UK"]) == 1.0
 
     def test_empty_prediction(self):
         assert contains_match("", "Paris") == 0.0
@@ -393,14 +391,7 @@ class TestScorePrediction:
 
     def test_all_keys_present(self):
         scores = score_prediction("x", "y")
-        assert set(scores.keys()) == {
-            "exact_match",
-            "contains_match",
-            "unknown",
-            "precision",
-            "recall",
-            "f1",
-        }
+        assert set(scores.keys()) == {"exact_match", "contains_match", "unknown", "precision", "recall", "f1"}
 
     def test_contains_but_not_exact(self):
         scores = score_prediction("the Spice Girls band", "Spice Girls")
@@ -431,15 +422,11 @@ class TestAverageMetric:
         assert _average_metric([], "exact_match") == 0.0
 
     def test_all_correct(self):
-        results = [
-            _result(model_output="Answer", ground_truth="Answer") for _ in range(3)
-        ]
+        results = [_result(model_output="Answer", ground_truth="Answer") for _ in range(3)]
         assert _average_metric(results, "exact_match") == 1.0
 
     def test_none_correct(self):
-        results = [
-            _result(model_output="Wrong", ground_truth="Answer") for _ in range(3)
-        ]
+        results = [_result(model_output="Wrong", ground_truth="Answer") for _ in range(3)]
         assert _average_metric(results, "exact_match") == 0.0
 
     def test_half_correct(self):
@@ -530,17 +517,13 @@ class TestRateHelpers:
         assert f1_rate([]) == 0.0
 
     def test_all_correct(self):
-        results = [
-            _result(model_output="Answer", ground_truth="Answer") for _ in range(5)
-        ]
+        results = [_result(model_output="Answer", ground_truth="Answer") for _ in range(5)]
         assert exact_match_rate(results) == 1.0
         assert contains_match_rate(results) == 1.0
         assert unknown_rate(results) == 0.0
 
     def test_all_unknown(self):
-        results = [
-            _result(model_output="unknown", ground_truth="Answer") for _ in range(5)
-        ]
+        results = [_result(model_output="unknown", ground_truth="Answer") for _ in range(5)]
         assert unknown_rate(results) == 1.0
         assert exact_match_rate(results) == 0.0
 
@@ -578,16 +561,9 @@ class TestMetricsTotal:
     def test_all_keys_present(self):
         summary = metrics_total([_result()])
         expected_keys = {
-            "count",
-            "exact_match",
-            "contains_match",
-            "unknown_rate",
-            "precision",
-            "recall",
-            "f1",
-            "paired_count",
-            "parametric_leakage",
-            "retrieval_mediated_correctness",
+            "count", "exact_match", "contains_match", "unknown_rate",
+            "precision", "recall", "f1", "paired_count",
+            "parametric_leakage", "retrieval_mediated_correctness",
             "retrieval_artifact_rate",
         }
         assert expected_keys <= set(summary.keys())
@@ -598,9 +574,7 @@ class TestMetricsTotal:
         assert summary["exact_match"] == 1.0
 
     def test_all_unknown(self):
-        results = [
-            _result(model_output="unknown", ground_truth="Paris") for _ in range(4)
-        ]
+        results = [_result(model_output="unknown", ground_truth="Paris") for _ in range(4)]
         summary = metrics_total(results)
         assert summary["unknown_rate"] == 1.0
         assert summary["exact_match"] == 0.0
@@ -789,12 +763,8 @@ class TestParametricLeakage:
         assert parametric_leakage(results) == 0.0
 
     def test_half_leakage(self):
-        r1 = _del_on_off_pair(
-            fact_id=1, prompt="Q1?", ground_truth="GT", del_off_output="GT"
-        )
-        r2 = _del_on_off_pair(
-            fact_id=2, prompt="Q2?", ground_truth="GT", del_off_output="WRONG"
-        )
+        r1 = _del_on_off_pair(fact_id=1, prompt="Q1?", ground_truth="GT", del_off_output="GT")
+        r2 = _del_on_off_pair(fact_id=2, prompt="Q2?", ground_truth="GT", del_off_output="WRONG")
         assert parametric_leakage(r1 + r2) == 0.5
 
 
@@ -814,21 +784,15 @@ class TestRetrievalMediatedCorrectness:
         assert retrieval_mediated_correctness(results) == 1.0
 
     def test_both_correct(self):
-        results = _del_on_off_pair(
-            del_on_output="GT", del_off_output="GT", ground_truth="GT"
-        )
+        results = _del_on_off_pair(del_on_output="GT", del_off_output="GT", ground_truth="GT")
         assert retrieval_mediated_correctness(results) == 0.0
 
     def test_both_wrong(self):
-        results = _del_on_off_pair(
-            del_on_output="W", del_off_output="W", ground_truth="GT"
-        )
+        results = _del_on_off_pair(del_on_output="W", del_off_output="W", ground_truth="GT")
         assert retrieval_mediated_correctness(results) == 0.0
 
     def test_del_on_wrong_del_off_correct_not_counted(self):
-        results = _del_on_off_pair(
-            del_on_output="W", del_off_output="GT", ground_truth="GT"
-        )
+        results = _del_on_off_pair(del_on_output="W", del_off_output="GT", ground_truth="GT")
         assert retrieval_mediated_correctness(results) == 0.0
 
 
@@ -903,9 +867,7 @@ def test_trace_has_gold_equivalent_requires_subject_and_relation_match() -> None
 
 
 class TestTraceHasGoldEquivalent:
-    def _result_with_trace(
-        self, candidates, subject="S", relation="R", ground_truth="GT"
-    ):
+    def _result_with_trace(self, candidates, subject="S", relation="R", ground_truth="GT"):
         return {
             "subject": subject,
             "subject_aliases": [],
@@ -918,27 +880,13 @@ class TestTraceHasGoldEquivalent:
 
     def test_supports_target_fact_true(self):
         result = self._result_with_trace(
-            [
-                {
-                    "subject": "S",
-                    "relation": "R",
-                    "object": "GT",
-                    "supports_target_fact": True,
-                }
-            ]
+            [{"subject": "S", "relation": "R", "object": "GT", "supports_target_fact": True}]
         )
         assert trace_has_gold_equivalent(result) is True
 
     def test_all_candidates_wrong(self):
         result = self._result_with_trace(
-            [
-                {
-                    "subject": "X",
-                    "relation": "Y",
-                    "object": "Z",
-                    "supports_target_fact": False,
-                }
-            ]
+            [{"subject": "X", "relation": "Y", "object": "Z", "supports_target_fact": False}]
         )
         assert trace_has_gold_equivalent(result) is False
 
@@ -960,14 +908,7 @@ class TestTraceHasGoldEquivalent:
 
     def test_subject_mismatch_not_gold(self):
         result = self._result_with_trace(
-            [
-                {
-                    "subject": "WRONG",
-                    "relation": "R",
-                    "object": "GT",
-                    "supports_target_fact": False,
-                }
-            ],
+            [{"subject": "WRONG", "relation": "R", "object": "GT", "supports_target_fact": False}],
             subject="S",
             relation="R",
             ground_truth="GT",
@@ -976,14 +917,7 @@ class TestTraceHasGoldEquivalent:
 
     def test_relation_mismatch_not_gold(self):
         result = self._result_with_trace(
-            [
-                {
-                    "subject": "S",
-                    "relation": "WRONG_REL",
-                    "object": "GT",
-                    "supports_target_fact": False,
-                }
-            ],
+            [{"subject": "S", "relation": "WRONG_REL", "object": "GT", "supports_target_fact": False}],
             subject="S",
             relation="R",
             ground_truth="GT",
@@ -993,14 +927,7 @@ class TestTraceHasGoldEquivalent:
     def test_fallback_triple_matching(self):
         # supports_target_fact is False but all three fields match
         result = self._result_with_trace(
-            [
-                {
-                    "subject": "S",
-                    "relation": "R",
-                    "object": "GT",
-                    "supports_target_fact": False,
-                }
-            ],
+            [{"subject": "S", "relation": "R", "object": "GT", "supports_target_fact": False}],
             subject="S",
             relation="R",
             ground_truth="GT",
@@ -1010,18 +937,8 @@ class TestTraceHasGoldEquivalent:
     def test_multiple_candidates_one_matches(self):
         result = self._result_with_trace(
             [
-                {
-                    "subject": "X",
-                    "relation": "Y",
-                    "object": "Z",
-                    "supports_target_fact": False,
-                },
-                {
-                    "subject": "S",
-                    "relation": "R",
-                    "object": "GT",
-                    "supports_target_fact": False,
-                },
+                {"subject": "X", "relation": "Y", "object": "Z", "supports_target_fact": False},
+                {"subject": "S", "relation": "R", "object": "GT", "supports_target_fact": False},
             ],
             subject="S",
             relation="R",
@@ -1051,12 +968,7 @@ class TestRetrievalArtifactRate:
     def test_gold_evidence_present_not_artifact(self):
         trace = {
             "retained_candidates": [
-                {
-                    "subject": "S",
-                    "relation": "R",
-                    "object": "GT",
-                    "supports_target_fact": True,
-                }
+                {"subject": "S", "relation": "R", "object": "GT", "supports_target_fact": True}
             ]
         }
         results = _del_on_off_pair(
@@ -1070,9 +982,7 @@ class TestRetrievalArtifactRate:
         assert retrieval_artifact_rate(results) == 0.0
 
     def test_wrong_answer_no_artifact_even_without_evidence(self):
-        results = _del_on_off_pair(
-            del_on_output="WRONG", del_off_output="WRONG", ground_truth="GT"
-        )
+        results = _del_on_off_pair(del_on_output="WRONG", del_off_output="WRONG", ground_truth="GT")
         assert retrieval_artifact_rate(results) == 0.0
 
 
@@ -1129,10 +1039,10 @@ def test_cross_state_metrics_logged_to_wandb(wandb_run):
 
     pairs = [
         # (del_on_correct, del_off_correct)
-        (True, False),  # retrieval-mediated
-        (True, True),  # parametric leakage
+        (True, False),   # retrieval-mediated
+        (True, True),    # parametric leakage
         (False, False),  # neither
-        (True, False),  # retrieval-mediated
+        (True, False),   # retrieval-mediated
     ]
     results = []
     for i, (on_correct, off_correct) in enumerate(pairs):
@@ -1201,9 +1111,7 @@ def test_precision_recall_scatter_logged_to_wandb(wandb_run):
             import wandb
 
             fig, ax = plt.subplots()
-            scatter = ax.scatter(
-                recalls, precisions, c=f1s, cmap="RdYlGn", s=80, vmin=0, vmax=1
-            )
+            scatter = ax.scatter(recalls, precisions, c=f1s, cmap="RdYlGn", s=80, vmin=0, vmax=1)
             plt.colorbar(scatter, ax=ax, label="F1")
             ax.set_xlabel("Recall")
             ax.set_ylabel("Precision")
