@@ -38,7 +38,7 @@ submit() {
         --cpus-per-task="$cpt" \
         --output="${LOG_DIR}/slurm-%j.out" \
         --error="${LOG_DIR}/slurm-%j.err" \
-        payload.sh
+        scripts/run/payload.sh
 }
 
 echo "Submitting multi-partition GPU candidates..."
