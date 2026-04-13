@@ -18,9 +18,6 @@ require_command() {
   fi
 }
 
-log "Bootstrapping uv and Python dependencies"
-"${SCRIPT_DIR}/uv.sh"
-
 if [[ ! -d "${LMLM_DIR}" ]]; then
   log "LMLM checkout not found — cloning from GitHub"
   require_command git
@@ -28,6 +25,9 @@ if [[ ! -d "${LMLM_DIR}" ]]; then
 else
   log "Found sibling LMLM checkout at ${LMLM_DIR}"
 fi
+
+log "Bootstrapping uv and Python dependencies"
+"${SCRIPT_DIR}/uv.sh"
 
 log "Bootstrapping Claude Code and Ruflo"
 "${SCRIPT_DIR}/claude.sh"
