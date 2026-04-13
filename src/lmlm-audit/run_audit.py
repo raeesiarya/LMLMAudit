@@ -3,6 +3,7 @@ import html
 import json
 import os
 import re
+import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -317,6 +318,20 @@ class AuditJob:
     output_path: Path
 
 
+class TeeStream:
+    def __init__(self, *streams: Any) -> None:
+        self.streams = streams
+
+    def write(self, data: str) -> int:
+        for stream in self.streams:
+            stream.write(data)
+        return len(data)
+
+    def flush(self) -> None:
+        for stream in self.streams:
+            stream.flush()
+
+
 def discover_custom_audit_jobs(output_dir: Path) -> list[AuditJob]:
     jobs: list[AuditJob] = []
     for domain_dir in sorted(
@@ -465,6 +480,15 @@ def parse_args() -> argparse.Namespace:
         help="Directory where JSONL audit results will be written.",
     )
     parser.add_argument(
+        "--log-file",
+        type=Path,
+        default=None,
+        help=(
+            "Optional path for a run log file. Defaults to <output-dir>/run_audit.log "
+            "when omitted."
+        ),
+    )
+    parser.add_argument(
         "--model-name",
         type=str,
         default="kilian-group/LMLM-llama2-382M",
@@ -503,96 +527,115 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    jobs = resolve_audit_jobs(args)
-    if not jobs:
-        raise FileNotFoundError(
-            "No audit jobs found. Add custom prompts under data/custom_databases or "
-            "pass --prompt-files explicitly."
-        )
+    log_path = args.log_file or (args.output_dir / "run_audit.log")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    from model_loader import load_model_and_tokenizer
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    with log_path.open("a", encoding="utf-8") as log_handle:
+        sys.stdout = TeeStream(original_stdout, log_handle)
+        sys.stderr = TeeStream(original_stderr, log_handle)
 
-    state_values = [DatabaseState(state) for state in args.states]
-    if args.disable_dblookup:
-        state_values = [DatabaseState.DEL_OFF]
-    states = state_values
-    wandb_module = setup_wandb() if args.wandb_activation == "on" else None
+        try:
+            print(f"Logging run_audit output to {log_path}")
 
-    jobs_by_database: dict[Path, list[AuditJob]] = defaultdict(list)
-    for job in jobs:
-        jobs_by_database[job.database_path].append(job)
-
-    for database_path in sorted(jobs_by_database):
-        model, tokenizer = load_model_and_tokenizer(
-            model_name=args.model_name,
-            database_path=database_path,
-        )
-        base_db_manager = model.db_manager
-
-        for job in jobs_by_database[database_path]:
-            print(f"Running audit for {job.prompt_path} with database {database_path}")
-            results = run_audit(
-                prompt_path=job.prompt_path,
-                base_db_manager=base_db_manager,
-                model=model,
-                tokenizer=tokenizer,
-                states=states,
-                max_new_tokens=args.max_new_tokens,
-                limit=args.limit,
-            )
-
-            save_results(results, job.output_path)
-            total_metrics = metrics_total(results)
-            metrics_by_state = {
-                state.value: metrics_total(
-                    [result for result in results if result["state"] == state.value]
+            jobs = resolve_audit_jobs(args)
+            if not jobs:
+                raise FileNotFoundError(
+                    "No audit jobs found. Add custom prompts under data/custom_databases or "
+                    "pass --prompt-files explicitly."
                 )
-                for state in states
-            }
 
-            print("Cross-state audit metrics:")
-            print(f"  Paired count: {total_metrics['paired_count']}")
-            print(
-                f"  Parametric leakage L(f): {total_metrics['parametric_leakage']:.3f}"
-            )
-            print(
-                "  Retrieval-mediated correctness R(f): "
-                f"{total_metrics['retrieval_mediated_correctness']:.3f}"
-            )
-            print(
-                f"  Retrieval artifact rate: {total_metrics['retrieval_artifact_rate']:.3f}"
-            )
-            print("Metrics by state:")
-            for state in states:
-                metrics = metrics_by_state[state.value]
-                print(f"{state.value}:")
-                print(f"  Count: {metrics['count']}")
-                print(f"  Exact match: {metrics['exact_match']:.3f}")
-                print(f"  Contains match: {metrics['contains_match']:.3f}")
-                print(f"  Unknown rate: {metrics['unknown_rate']:.3f}")
-                print(f"  Precision: {metrics['precision']:.3f}")
-                print(f"  Recall: {metrics['recall']:.3f}")
-                print(f"  F1: {metrics['f1']:.3f}")
-                print(f"  Parametric leakage L(f): {metrics['parametric_leakage']:.3f}")
-                print(
-                    f"  Retrieval-mediated correctness R(f): {metrics['retrieval_mediated_correctness']:.3f}"
+            from model_loader import load_model_and_tokenizer
+
+            state_values = [DatabaseState(state) for state in args.states]
+            if args.disable_dblookup:
+                state_values = [DatabaseState.DEL_OFF]
+            states = state_values
+            wandb_module = setup_wandb() if args.wandb_activation == "on" else None
+
+            jobs_by_database: dict[Path, list[AuditJob]] = defaultdict(list)
+            for job in jobs:
+                jobs_by_database[job.database_path].append(job)
+
+            for database_path in sorted(jobs_by_database):
+                model, tokenizer = load_model_and_tokenizer(
+                    model_name=args.model_name,
+                    database_path=database_path,
                 )
-                print(
-                    f"  Retrieval artifact rate: {metrics['retrieval_artifact_rate']:.3f}"
-                )
-                if wandb_module is not None:
-                    log_metrics_to_wandb(
-                        wandb_module=wandb_module,
+                base_db_manager = model.db_manager
+
+                for job in jobs_by_database[database_path]:
+                    print(
+                        f"Running audit for {job.prompt_path} with database {database_path}"
+                    )
+                    results = run_audit(
                         prompt_path=job.prompt_path,
-                        state=state,
-                        state_metrics=metrics,
-                        cross_state_metrics=total_metrics,
-                        model_name=args.model_name,
-                        database_path=database_path,
+                        base_db_manager=base_db_manager,
+                        model=model,
+                        tokenizer=tokenizer,
+                        states=states,
                         max_new_tokens=args.max_new_tokens,
                         limit=args.limit,
                     )
-                    print(f"  W&B run: {job.prompt_path.stem}_{state.value}")
+
+                    save_results(results, job.output_path)
+                    total_metrics = metrics_total(results)
+                    metrics_by_state = {
+                        state.value: metrics_total(
+                            [result for result in results if result["state"] == state.value]
+                        )
+                        for state in states
+                    }
+
+                    print("Cross-state audit metrics:")
+                    print(f"  Paired count: {total_metrics['paired_count']}")
+                    print(
+                        f"  Parametric leakage L(f): {total_metrics['parametric_leakage']:.3f}"
+                    )
+                    print(
+                        "  Retrieval-mediated correctness R(f): "
+                        f"{total_metrics['retrieval_mediated_correctness']:.3f}"
+                    )
+                    print(
+                        f"  Retrieval artifact rate: {total_metrics['retrieval_artifact_rate']:.3f}"
+                    )
+                    print("Metrics by state:")
+                    for state in states:
+                        metrics = metrics_by_state[state.value]
+                        print(f"{state.value}:")
+                        print(f"  Count: {metrics['count']}")
+                        print(f"  Exact match: {metrics['exact_match']:.3f}")
+                        print(f"  Contains match: {metrics['contains_match']:.3f}")
+                        print(f"  Unknown rate: {metrics['unknown_rate']:.3f}")
+                        print(f"  Precision: {metrics['precision']:.3f}")
+                        print(f"  Recall: {metrics['recall']:.3f}")
+                        print(f"  F1: {metrics['f1']:.3f}")
+                        print(
+                            f"  Parametric leakage L(f): {metrics['parametric_leakage']:.3f}"
+                        )
+                        print(
+                            f"  Retrieval-mediated correctness R(f): {metrics['retrieval_mediated_correctness']:.3f}"
+                        )
+                        print(
+                            f"  Retrieval artifact rate: {metrics['retrieval_artifact_rate']:.3f}"
+                        )
+                        if wandb_module is not None:
+                            log_metrics_to_wandb(
+                                wandb_module=wandb_module,
+                                prompt_path=job.prompt_path,
+                                state=state,
+                                state_metrics=metrics,
+                                cross_state_metrics=total_metrics,
+                                model_name=args.model_name,
+                                database_path=database_path,
+                                max_new_tokens=args.max_new_tokens,
+                                limit=args.limit,
+                            )
+                            print(f"  W&B run: {job.prompt_path.stem}_{state.value}")
+        finally:
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
 
 
 if __name__ == "__main__":
