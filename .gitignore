@@ -22,9 +22,6 @@ wheels/
 # Weights & Biases
 wandb
 
-# Logging
-outputs/
-
 # uv
 uv.lock
 
