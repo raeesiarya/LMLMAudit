@@ -1,23 +1,40 @@
 #!/bin/bash
 set -euo pipefail
 
-ACCOUNT=fc_cosi
-WALL_MIN=06:00:00
-WALL=08:00:00
-LOG_DIR="${LOG_DIR:-logs}"
-mkdir -p "$LOG_DIR"
+##############################################
+# Require and load .env
+##############################################
+ENV_FILE="${ENV_FILE:-.env}"
 
-# CPU rules
-CPUS_A5000=4
-CPUS_L40=8
-CPUS_A40=8
-CPUS_2080TI=2
-CPUS_1080TI=2
+if [[ ! -f "$ENV_FILE" ]]; then
+    echo "ERROR: $ENV_FILE not found"
+    exit 1
+fi
+
+set -a
+source "$ENV_FILE"
+set +a
+
+##############################################
+# Validate required variables
+##############################################
+: "${ACCOUNT:?Missing ACCOUNT in .env}"
+: "${WALL_MIN:?Missing WALL_MIN in .env}"
+: "${WALL:?Missing WALL in .env}"
+: "${LOG_DIR:?Missing LOG_DIR in .env}"
+
+: "${CPUS_A5000:?Missing CPUS_A5000 in .env}"
+: "${CPUS_L40:?Missing CPUS_L40 in .env}"
+: "${CPUS_A40:?Missing CPUS_A40 in .env}"
+: "${CPUS_2080TI:?Missing CPUS_2080TI in .env}"
+: "${CPUS_1080TI:?Missing CPUS_1080TI in .env}"
+
+mkdir -p "$LOG_DIR"
 
 declare -a JOBS=()
 
 ##############################################
-# submit(partition, qos, gres_string, gpus, cpus_per_task)
+# submit(...)
 ##############################################
 submit() {
     local partition="$1"
@@ -41,45 +58,65 @@ submit() {
         scripts/runs/payload.sh
 }
 
+##############################################
+# Submit jobs
+##############################################
 echo "Submitting multi-partition GPU candidates..."
 
-# savio4_gpu A5000
-for g in 1; do
-    jid=$(submit "savio4_gpu" "a5k_gpu4_normal" "gpu:A5000:${g}" "$g" "$CPUS_A5000")
-    echo "savio4_gpu A5000 (${g} GPU) -> $jid"
-    JOBS+=("$jid")
-done
+jid=$(submit "savio4_gpu" "a5k_gpu4_normal" "gpu:A5000:1" "1" "$CPUS_A5000")
+echo "A5000 -> $jid"
+JOBS+=("$jid")
 
-# savio4_gpu L40
-for g in 1; do
-    jid=$(submit "savio4_gpu" "savio_lowprio" "gpu:L40:${g}" "$g" "$CPUS_L40")
-    echo "savio4_gpu L40 (${g} GPU lowprio) -> $jid"
-    JOBS+=("$jid")
-done
+jid=$(submit "savio4_gpu" "savio_lowprio" "gpu:L40:1" "1" "$CPUS_L40")
+echo "L40 -> $jid"
+JOBS+=("$jid")
 
-# savio3_gpu A40
-for g in 1; do
-    jid=$(submit "savio3_gpu" "a40_gpu3_normal" "gpu:A40:${g}" "$g" "$CPUS_A40")
-    echo "savio3_gpu A40 (${g} GPU) -> $jid"
-    JOBS+=("$jid")
-done
+jid=$(submit "savio3_gpu" "a40_gpu3_normal" "gpu:A40:1" "1" "$CPUS_A40")
+echo "A40 -> $jid"
+JOBS+=("$jid")
 
-# savio3_gpu GTX2080Ti
-for g in 1; do
-    jid=$(submit "savio3_gpu" "gtx2080_gpu3_normal" "gpu:GTX2080TI:${g}" "$g" "$CPUS_2080TI")
-    echo "savio3_gpu GTX2080Ti (${g} GPU) -> $jid"
-    JOBS+=("$jid")
-done
+jid=$(submit "savio3_gpu" "gtx2080_gpu3_normal" "gpu:GTX2080TI:1" "1" "$CPUS_2080TI")
+echo "2080Ti -> $jid"
+JOBS+=("$jid")
 
-# savio2_1080ti GTX1080Ti
-for g in 1; do
-    jid=$(submit "savio2_1080ti" "savio_normal" "gpu:GTX1080TI:${g}" "$g" "$CPUS_1080TI")
-    echo "savio2_1080ti (${g} GPU) -> $jid"
-    JOBS+=("$jid")
-done
+jid=$(submit "savio2_1080ti" "savio_normal" "gpu:GTX1080TI:1" "1" "$CPUS_1080TI")
+echo "1080Ti -> $jid"
+JOBS+=("$jid")
 
+##############################################
+# Wait for first RUNNING job
+##############################################
 echo
-echo "All jobs submitted. Logs will be written to ${LOG_DIR}/slurm-<jobid>.{out,err}"
-echo "Check status with: squeue -j $(IFS=,; echo "${JOBS[*]}")"
+echo "Waiting for first job to start..."
 
-exit 0
+WINNER=""
+
+while [[ -z "$WINNER" ]]; do
+    sleep 5
+
+    running_jobs=()
+    for jid in "${JOBS[@]}"; do
+        state=$(squeue -j "$jid" -h -o "%T" 2>/dev/null || true)
+        if [[ "$state" == "RUNNING" ]]; then
+            running_jobs+=("$jid")
+        fi
+    done
+
+    if (( ${#running_jobs[@]} > 0 )); then
+        WINNER="${running_jobs[0]}"
+    fi
+done
+
+##############################################
+# Cancel others
+##############################################
+echo "Winner: $WINNER"
+echo "Cancelling others..."
+
+for jid in "${JOBS[@]}"; do
+    if [[ "$jid" != "$WINNER" ]]; then
+        scancel "$jid" 2>/dev/null || true
+    fi
+done
+
+echo "Done."
