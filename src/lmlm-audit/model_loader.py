@@ -69,10 +69,3 @@ def load_model_and_tokenizer(
     model.eval()
 
     return model, tokenizer
-
-
-if __name__ == "__main__":
-    model, tokenizer = load_model_and_tokenizer()
-    print("Model and tokenizer loaded successfully.")
-    print("Tokenizer vocab size:", tokenizer.vocab_size)
-    print("Model architecture:", model.config.architectures)

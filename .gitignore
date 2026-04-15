@@ -22,8 +22,15 @@ wheels/
 # Weights & Biases
 wandb
 
-# Logging
-outputs/
-
 # uv
 uv.lock
+
+# Claude
+/.claude
+CLAUDE.md
+
+# Ruflo (Claude)
+/.swarm
+/.claude-flow
+ruvector.db
+.mcp.json

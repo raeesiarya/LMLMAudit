@@ -49,13 +49,17 @@ def target_fact_from_prompt_row(prompt_row: dict[str, Any]) -> TargetFact:
 def is_deleted_triplet(triplet: tuple[str, str, str], target_fact: TargetFact) -> bool:
     subject, relation, obj = triplet
     return (
-        values_equivalent(subject, target_fact.subject, right_aliases=target_fact.subject_aliases)
+        values_equivalent(
+            subject, target_fact.subject, right_aliases=target_fact.subject_aliases
+        )
         and values_equivalent(
             relation,
             target_fact.relation,
             right_aliases=target_fact.relation_aliases,
         )
-        and values_equivalent(obj, target_fact.object, right_aliases=target_fact.object_aliases)
+        and values_equivalent(
+            obj, target_fact.object, right_aliases=target_fact.object_aliases
+        )
     )
 
 
@@ -99,7 +103,9 @@ def extract_lookup_query(prompt: str) -> tuple[str, str]:
         raise ValueError(f"No valid dblookup pattern found in prompt: {prompt}")
 
     if len(matches) > 1:
-        raise ValueError(f"Multiple dblookup matches found: {matches} in prompt: {prompt}")
+        raise ValueError(
+            f"Multiple dblookup matches found: {matches} in prompt: {prompt}"
+        )
 
     entity, relationship = matches.pop()
     return entity, relationship
@@ -196,11 +202,14 @@ class AuditDatabaseManager:
             "matches_object": matches_object,
             "supports_target_fact": supports_target_fact,
             "matches_deleted_fact": (
-                self.target_fact is not None and is_deleted_triplet(candidate[:3], self.target_fact)
+                self.target_fact is not None
+                and is_deleted_triplet(candidate[:3], self.target_fact)
             ),
         }
 
-    def retrieve_from_database(self, prompt: str, threshold: float | None = None) -> str:
+    def retrieve_from_database(
+        self, prompt: str, threshold: float | None = None
+    ) -> str:
         trace: dict[str, Any] = {
             "state": self.state.value,
             "retrieval_enabled": True,
@@ -213,7 +222,9 @@ class AuditDatabaseManager:
             "selected_value": None,
             "error": None,
         }
-        is_passthrough_state = self.state is DatabaseState.FULL or self.target_fact is None
+        is_passthrough_state = (
+            self.state is DatabaseState.FULL or self.target_fact is None
+        )
 
         try:
             entity, relationship = extract_lookup_query(prompt)
@@ -235,7 +246,9 @@ class AuditDatabaseManager:
         except Exception as exc:
             trace["error"] = str(exc)
             if is_passthrough_state:
-                value = self.base_db_manager.retrieve_from_database(prompt, threshold=threshold)
+                value = self.base_db_manager.retrieve_from_database(
+                    prompt, threshold=threshold
+                )
                 trace["selected_value"] = value
                 self.last_trace = trace
                 return value
@@ -243,7 +256,9 @@ class AuditDatabaseManager:
             raise
 
         if is_passthrough_state:
-            value = self.base_db_manager.retrieve_from_database(prompt, threshold=threshold)
+            value = self.base_db_manager.retrieve_from_database(
+                prompt, threshold=threshold
+            )
             trace["retained_candidates"] = trace["all_candidates"]
             trace["selected_value"] = value
 
@@ -279,9 +294,7 @@ class AuditDatabaseManager:
                 f"No retrieval results for entity={entity!r}, relationship={relationship!r}"
             )
             self.last_trace = trace
-            raise ValueError(
-                trace["error"]
-            )
+            raise ValueError(trace["error"])
 
         selected_candidate = remaining_candidates[0]
         trace["selected_candidate"] = self._candidate_trace_entry(selected_candidate)
