@@ -1,4 +1,5 @@
 import argparse
+import csv
 import html
 import json
 import os
@@ -302,6 +303,28 @@ def run_audit(
     return results
 
 
+def write_metrics_csvs(
+    cross_state_rows: list[dict[str, Any]],
+    per_state_rows: list[dict[str, Any]],
+    cross_state_path: Path,
+    per_state_path: Path,
+) -> None:
+    cross_state_path.parent.mkdir(parents=True, exist_ok=True)
+    per_state_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if cross_state_rows:
+        with cross_state_path.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(cross_state_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(cross_state_rows)
+
+    if per_state_rows:
+        with per_state_path.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(per_state_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(per_state_rows)
+
+
 def save_results(results: list[dict[str, Any]], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as f:
@@ -554,6 +577,9 @@ def main() -> None:
         for job in jobs:
             jobs_by_database[job.database_path].append(job)
 
+        cross_state_rows: list[dict[str, Any]] = []
+        per_state_rows: list[dict[str, Any]] = []
+
         for database_path in sorted(jobs_by_database):
             model, tokenizer = load_model_and_tokenizer(
                 model_name=args.model_name,
@@ -586,6 +612,23 @@ def main() -> None:
                     )
                     for state in states
                 }
+
+                cross_state_rows.append(
+                    {
+                        "prompt_file": str(job.prompt_path),
+                        "database_path": str(database_path),
+                        **total_metrics,
+                    }
+                )
+                for state in states:
+                    per_state_rows.append(
+                        {
+                            "prompt_file": str(job.prompt_path),
+                            "database_path": str(database_path),
+                            "state": state.value,
+                            **metrics_by_state[state.value],
+                        }
+                    )
 
                 logger.print("Cross-state audit metrics:")
                 logger.print(f"  Paired count: {total_metrics['paired_count']}")
@@ -632,6 +675,17 @@ def main() -> None:
                             limit=args.limit,
                         )
                         logger.print(f"  W&B run: {job.prompt_path.stem}_{state.value}")
+
+        cross_state_csv_path = args.output_dir / "cross_state_metrics.csv"
+        per_state_csv_path = args.output_dir / "per_state_metrics.csv"
+        write_metrics_csvs(
+            cross_state_rows=cross_state_rows,
+            per_state_rows=per_state_rows,
+            cross_state_path=cross_state_csv_path,
+            per_state_path=per_state_csv_path,
+        )
+        logger.print(f"Wrote cross-state metrics CSV to {cross_state_csv_path}")
+        logger.print(f"Wrote per-state metrics CSV to {per_state_csv_path}")
     finally:
         logger.close()
 
