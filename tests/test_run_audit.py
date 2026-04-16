@@ -22,6 +22,7 @@ from run_audit import (
     compute_generation_budget,
     extract_lookup_values,
     load_prompts,
+    parse_args,
     prepare_prompt,
     retrieve_lookup_value,
     save_results,
@@ -599,3 +600,73 @@ def test_choose_answer_distribution_logged_to_wandb(wandb_run):
             pass
 
     assert set(sources) <= {"lookup_value", "postprocessed_text", "empty"}
+
+
+# ===========================================================================
+# parse_args – atomic-filter preprocessing CLI flags
+# ===========================================================================
+
+
+class TestParseArgsPreprocessing:
+    def test_preprocessing_defaults_to_false(self):
+        with patch.object(sys, "argv", ["run_audit.py"]):
+            args = parse_args()
+        assert args.preprocessing is False
+
+    def test_preprocessing_flag_sets_true(self):
+        with patch.object(sys, "argv", ["run_audit.py", "--preprocessing"]):
+            args = parse_args()
+        assert args.preprocessing is True
+
+    def test_preprocess_cache_dir_defaults_under_output_dir(self, tmp_path):
+        with patch.object(
+            sys,
+            "argv",
+            ["run_audit.py", "--output-dir", str(tmp_path / "results")],
+        ):
+            args = parse_args()
+        assert args.preprocess_cache_dir == tmp_path / "results" / "preprocessed"
+
+    def test_preprocess_cache_dir_explicit_overrides_default(self, tmp_path):
+        explicit = tmp_path / "custom_cache"
+        with patch.object(
+            sys,
+            "argv",
+            [
+                "run_audit.py",
+                "--output-dir",
+                str(tmp_path / "results"),
+                "--preprocess-cache-dir",
+                str(explicit),
+            ],
+        ):
+            args = parse_args()
+        assert args.preprocess_cache_dir == explicit
+
+    def test_judge_base_url_default(self):
+        with patch.object(sys, "argv", ["run_audit.py"]):
+            args = parse_args()
+        assert args.judge_base_url == "http://localhost:8000"
+
+    def test_judge_model_default(self):
+        with patch.object(sys, "argv", ["run_audit.py"]):
+            args = parse_args()
+        assert args.judge_model == "meta-llama/Llama-3.3-70B-Instruct"
+
+    def test_judge_base_url_override(self):
+        with patch.object(
+            sys,
+            "argv",
+            ["run_audit.py", "--judge-base-url", "http://example.com:9000"],
+        ):
+            args = parse_args()
+        assert args.judge_base_url == "http://example.com:9000"
+
+    def test_judge_model_override(self):
+        with patch.object(
+            sys,
+            "argv",
+            ["run_audit.py", "--judge-model", "my-org/my-model"],
+        ):
+            args = parse_args()
+        assert args.judge_model == "my-org/my-model"
