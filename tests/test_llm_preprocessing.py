@@ -9,14 +9,20 @@ import copy
 import json
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src/lmlm-audit"))
 
 from llm_preprocessing import (
+    ATOMIC_FILTER_SYSTEM_PROMPT,
     JudgeClient,
     StubJudgeClient,
+    VLLMJudgeClient,
+    _enumerate_triplets,
+    _ensure_valid_payload,
+    build_atomic_filter_messages,
     build_filtered_database,
     load_database,
     load_triplets,
@@ -525,3 +531,381 @@ class TestPreprocessDatabaseToFile:
             db_path, second_judge, output_path, force_recompute=True
         )
         assert second_judge.calls == 1
+
+    def test_existing_invalid_output_is_recomputed(self, tmp_path):
+        """Corrupt cached output on disk should be recomputed, not crash."""
+        db_path = _write_json(tmp_path / "db" / "countries.json", _sample_db())
+        # Use a filename that does NOT collide with the internal cache path
+        # (<output_parent>/<db_stem>.filtered.json).
+        output_path = tmp_path / "out" / "my_result.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        # Write junk at the output_path that json.loads cannot parse.
+        output_path.write_text("not valid json {{{", encoding="utf-8")
+
+        judge = StubJudgeClient(_sample_groups_payload())
+        returned = preprocess_database_to_file(db_path, judge, output_path)
+
+        # The invalid file was replaced with a real filtered DB.
+        assert returned == output_path
+        with output_path.open() as f:
+            cached = json.load(f)
+        assert cached["triplets"][0] == [
+            "United States",
+            "Capital",
+            "Washington, D.C.",
+        ]
+
+
+# ===========================================================================
+# _enumerate_triplets & build_atomic_filter_messages
+# ===========================================================================
+
+
+class TestEnumerateTriplets:
+    def test_empty_list(self):
+        assert _enumerate_triplets([]) == ""
+
+    def test_single_triplet(self):
+        result = _enumerate_triplets([("A", "R", "B")])
+        assert result == "0. (A, R, B)"
+
+    def test_multiple_triplets_numbered_sequentially(self):
+        triplets = [("A", "R", "B"), ("C", "S", "D"), ("E", "T", "F")]
+        result = _enumerate_triplets(triplets)
+        lines = result.split("\n")
+        assert lines[0] == "0. (A, R, B)"
+        assert lines[1] == "1. (C, S, D)"
+        assert lines[2] == "2. (E, T, F)"
+
+
+class TestBuildAtomicFilterMessages:
+    def test_returns_two_messages_with_correct_roles(self):
+        messages = build_atomic_filter_messages([("A", "R", "B")])
+        assert len(messages) == 2
+        assert messages[0]["role"] == "system"
+        assert messages[1]["role"] == "user"
+
+    def test_system_prompt_is_the_canonical_constant(self):
+        messages = build_atomic_filter_messages([("A", "R", "B")])
+        assert messages[0]["content"] == ATOMIC_FILTER_SYSTEM_PROMPT
+
+    def test_user_prompt_contains_enumerated_triplets(self):
+        messages = build_atomic_filter_messages(
+            [("USA", "Capital", "DC"), ("France", "Capital", "Paris")]
+        )
+        user_content = messages[1]["content"]
+        assert "0. (USA, Capital, DC)" in user_content
+        assert "1. (France, Capital, Paris)" in user_content
+
+    def test_empty_triplet_list(self):
+        messages = build_atomic_filter_messages([])
+        assert len(messages) == 2
+        assert messages[1]["role"] == "user"
+
+
+# ===========================================================================
+# VLLMJudgeClient (mocked requests)
+# ===========================================================================
+
+
+class TestVLLMJudgeClient:
+    def _build_client(self, **overrides):
+        # The module stores a reference to the `requests` module in
+        # self._requests during __init__; swap it for a Mock right after.
+        defaults = dict(
+            base_url="http://localhost:8000",
+            model="my-model",
+            temperature=0.0,
+            max_tokens=1024,
+            timeout=30.0,
+        )
+        defaults.update(overrides)
+        client = VLLMJudgeClient(**defaults)
+        client._requests = MagicMock()
+        return client
+
+    def test_base_url_is_stripped_of_trailing_slash(self):
+        client = self._build_client(base_url="http://host/")
+        assert client.base_url == "http://host"
+
+    def test_api_key_from_kwarg_wins(self):
+        client = self._build_client(api_key="secret-key")
+        assert client.api_key == "secret-key"
+
+    def test_api_key_from_env_when_not_provided(self, monkeypatch):
+        monkeypatch.setenv("VLLM_API_KEY", "env-key")
+        client = VLLMJudgeClient(base_url="http://x", model="m")
+        assert client.api_key == "env-key"
+
+    def test_api_key_default_when_no_source(self, monkeypatch):
+        monkeypatch.delenv("VLLM_API_KEY", raising=False)
+        client = VLLMJudgeClient(base_url="http://x", model="m")
+        assert client.api_key == "not-needed"
+
+    def test_filter_atomic_posts_to_chat_completions_endpoint(self):
+        client = self._build_client(base_url="http://host:9000")
+        response = MagicMock()
+        response.json.return_value = {
+            "choices": [
+                {"message": {"content": json.dumps(_sample_groups_payload())}}
+            ]
+        }
+        client._requests.post.return_value = response
+
+        triplets = [("A", "R", "B")] * 5
+        result = client.filter_atomic(triplets)
+
+        # Called the right URL.
+        call_args = client._requests.post.call_args
+        assert call_args.args[0] == "http://host:9000/v1/chat/completions"
+        # Posted the right payload.
+        posted = call_args.kwargs["json"]
+        assert posted["model"] == "my-model"
+        assert posted["temperature"] == 0.0
+        assert posted["max_tokens"] == 1024
+        assert len(posted["messages"]) == 2
+        # Authorization header is set.
+        assert "Authorization" in call_args.kwargs["headers"]
+        assert call_args.kwargs["headers"]["Authorization"].startswith("Bearer ")
+        # Parses the response.
+        assert result["unmerged"] == [4]
+
+    def test_filter_atomic_raises_on_http_error(self):
+        client = self._build_client()
+        response = MagicMock()
+        response.raise_for_status.side_effect = RuntimeError("500 Internal")
+        client._requests.post.return_value = response
+        with pytest.raises(RuntimeError, match="500"):
+            client.filter_atomic([("A", "R", "B")])
+
+    def test_filter_atomic_validates_response_shape(self):
+        """Malformed LLM content should raise through parse_atomic_filter_response."""
+        client = self._build_client()
+        response = MagicMock()
+        response.json.return_value = {
+            "choices": [{"message": {"content": "not JSON at all"}}]
+        }
+        client._requests.post.return_value = response
+        with pytest.raises(ValueError):
+            client.filter_atomic([("A", "R", "B")])
+
+
+# ===========================================================================
+# Extra parse_atomic_filter_response error paths (shape validation)
+# ===========================================================================
+
+
+class TestParseAtomicFilterResponseExtra:
+    def test_brace_balanced_fallback_recovers_json(self):
+        """Greedy {.*} fails on trailing '}' but brace-balanced scan succeeds."""
+        # Valid JSON followed by a stray '}' — greedy regex overshoots,
+        # forcing the brace-balanced fallback to handle it.
+        valid = json.dumps(_sample_groups_payload())
+        raw = valid + "\nstray: }"
+        result = parse_atomic_filter_response(raw, expected_n=5)
+        assert result["unmerged"] == [4]
+        assert len(result["groups"]) == 2
+
+    def test_non_dict_json_raises(self):
+        # JSON parses fine as list, but we want a dict.
+        with pytest.raises(ValueError):
+            parse_atomic_filter_response("[1, 2, 3]")
+
+    def test_groups_not_list_raises(self):
+        payload = {"groups": {}, "unmerged": []}
+        with pytest.raises(ValueError, match="'groups' must be a list"):
+            parse_atomic_filter_response(json.dumps(payload))
+
+    def test_unmerged_not_list_raises(self):
+        payload = {"groups": [], "unmerged": {}}
+        with pytest.raises(ValueError, match="'unmerged' must be a list"):
+            parse_atomic_filter_response(json.dumps(payload))
+
+    def test_unmerged_contains_non_int_raises(self):
+        payload = {"groups": [], "unmerged": ["0", 1]}
+        with pytest.raises(ValueError, match="ints"):
+            parse_atomic_filter_response(json.dumps(payload))
+
+    def test_unmerged_contains_bool_raises(self):
+        payload = {"groups": [], "unmerged": [True]}
+        with pytest.raises(ValueError, match="ints"):
+            parse_atomic_filter_response(json.dumps(payload))
+
+    def test_group_not_dict_raises(self):
+        payload = {"groups": [["not", "a", "dict"]], "unmerged": []}
+        with pytest.raises(ValueError, match="must be a dict"):
+            parse_atomic_filter_response(json.dumps(payload))
+
+    def test_group_missing_required_key_raises(self):
+        payload = {
+            "groups": [{"group_id": 0, "member_indices": [0]}],  # no canonical_triplet_id
+            "unmerged": [],
+        }
+        with pytest.raises(ValueError, match="canonical_triplet_id"):
+            parse_atomic_filter_response(json.dumps(payload), expected_n=1)
+
+    def test_group_id_not_int_raises(self):
+        payload = {
+            "groups": [
+                {
+                    "group_id": "zero",
+                    "canonical_triplet_id": 0,
+                    "member_indices": [0],
+                }
+            ],
+            "unmerged": [],
+        }
+        with pytest.raises(ValueError, match="group_id must be an int"):
+            parse_atomic_filter_response(json.dumps(payload))
+
+    def test_canonical_id_not_int_raises(self):
+        payload = {
+            "groups": [
+                {
+                    "group_id": 0,
+                    "canonical_triplet_id": "zero",
+                    "member_indices": [0],
+                }
+            ],
+            "unmerged": [],
+        }
+        with pytest.raises(ValueError, match="canonical_triplet_id must be an int"):
+            parse_atomic_filter_response(json.dumps(payload))
+
+    def test_members_not_list_raises(self):
+        payload = {
+            "groups": [
+                {
+                    "group_id": 0,
+                    "canonical_triplet_id": 0,
+                    "member_indices": "not a list",
+                }
+            ],
+            "unmerged": [],
+        }
+        with pytest.raises(ValueError, match="member_indices must be a list"):
+            parse_atomic_filter_response(json.dumps(payload))
+
+    def test_members_non_int_raises(self):
+        payload = {
+            "groups": [
+                {
+                    "group_id": 0,
+                    "canonical_triplet_id": 0,
+                    "member_indices": [0, "1"],
+                }
+            ],
+            "unmerged": [],
+        }
+        with pytest.raises(ValueError, match="member_indices must contain ints"):
+            parse_atomic_filter_response(json.dumps(payload))
+
+    def test_empty_members_raises(self):
+        payload = {
+            "groups": [
+                {"group_id": 0, "canonical_triplet_id": 0, "member_indices": []}
+            ],
+            "unmerged": [0],
+        }
+        with pytest.raises(ValueError, match="empty member_indices"):
+            parse_atomic_filter_response(json.dumps(payload), expected_n=1)
+
+    def test_duplicate_members_within_group_raises(self):
+        payload = {
+            "groups": [
+                {
+                    "group_id": 0,
+                    "canonical_triplet_id": 0,
+                    "member_indices": [0, 0, 1],
+                }
+            ],
+            "unmerged": [],
+        }
+        with pytest.raises(ValueError, match="duplicates"):
+            parse_atomic_filter_response(json.dumps(payload), expected_n=2)
+
+    def test_brace_balanced_scan_breaks_on_unparseable_candidate(self):
+        """All three parse strategies fail → ValueError."""
+        # A '{...}' span that is not valid JSON, plus a trailing '}' to throw
+        # off the greedy regex. Brace-balanced scan extracts '{ bad }' which
+        # also fails json.loads, triggering the break on line 253-254.
+        raw = "{ bad }} extra"
+        with pytest.raises(ValueError, match="could not parse JSON"):
+            parse_atomic_filter_response(raw)
+
+    def test_non_string_reason_is_coerced(self):
+        payload = {
+            "groups": [
+                {
+                    "group_id": 0,
+                    "canonical_triplet_id": 0,
+                    "member_indices": [0],
+                    "reason": 42,  # int instead of str
+                }
+            ],
+            "unmerged": [],
+        }
+        result = parse_atomic_filter_response(json.dumps(payload), expected_n=1)
+        assert isinstance(result["groups"][0]["reason"], str)
+        assert result["groups"][0]["reason"] == "42"
+
+
+# ===========================================================================
+# build_filtered_database – index validation
+# ===========================================================================
+
+
+class TestBuildFilteredDatabaseIndexChecks:
+    def test_unmerged_out_of_range_raises(self):
+        original = _sample_db()  # N=5
+        payload = {"groups": [], "unmerged": list(range(5)) + [99]}
+        with pytest.raises(ValueError, match="out-of-range"):
+            build_filtered_database(original, payload)
+
+    def test_non_int_canonical_index_raises_via_build(self):
+        """_check_idx rejects bool canonical index even if upstream missed it."""
+        original = _sample_db()  # N=5
+        payload = {
+            "groups": [
+                {
+                    "group_id": 0,
+                    # bool is subclass of int, but _check_idx rejects bools.
+                    "canonical_triplet_id": True,
+                    "member_indices": [0],
+                }
+            ],
+            "unmerged": [1, 2, 3, 4],
+        }
+        with pytest.raises(ValueError, match="non-int"):
+            build_filtered_database(original, payload)
+
+    def test_canonical_out_of_range_raises(self):
+        original = _sample_db()  # N=5
+        payload = {
+            "groups": [
+                {
+                    "group_id": 0,
+                    "canonical_triplet_id": 99,
+                    "member_indices": [99],
+                }
+            ],
+            "unmerged": [0, 1, 2, 3, 4],
+        }
+        with pytest.raises(ValueError, match="out-of-range"):
+            build_filtered_database(original, payload)
+
+
+# ===========================================================================
+# _ensure_valid_payload
+# ===========================================================================
+
+
+class TestEnsureValidPayload:
+    def test_non_dict_raises(self):
+        with pytest.raises(ValueError, match="non-dict payload"):
+            _ensure_valid_payload([], expected_n=0)  # type: ignore[arg-type]
+
+    def test_valid_payload_roundtrip(self):
+        result = _ensure_valid_payload(_sample_groups_payload(), expected_n=5)
+        assert result["unmerged"] == [4]
+        assert len(result["groups"]) == 2
