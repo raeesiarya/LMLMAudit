@@ -357,7 +357,11 @@ class TestBuildFilteredDatabase:
         assert filtered["triplets"][0] == ["USA", "Capital City", "Washington, D.C."]
         assert filtered["triplets"][1] == ["USA", "Currency", "US Dollar"]
         # Then unmerged [1,2,3] sorted asc.
-        assert filtered["triplets"][2] == ["United States", "Capital", "Washington, D.C."]
+        assert filtered["triplets"][2] == [
+            "United States",
+            "Capital",
+            "Washington, D.C.",
+        ]
         assert filtered["triplets"][3] == ["Paris", "capital_of", "France"]
         assert filtered["triplets"][4] == ["France", "has_capital", "Paris"]
 
@@ -378,9 +382,7 @@ class CountingStubJudge(JudgeClient):
     def filter_atomic(self, triplets):
         self.calls += 1
         if self.raise_after is not None and self.calls > self.raise_after:
-            raise AssertionError(
-                f"judge called more than {self.raise_after} time(s)"
-            )
+            raise AssertionError(f"judge called more than {self.raise_after} time(s)")
         return copy.deepcopy(self._response)
 
 
@@ -448,9 +450,7 @@ class TestPreprocessDatabase:
         preprocess_database(db_path, judge, cache_dir=cache_dir)
         assert judge.calls == 1
 
-        preprocess_database(
-            db_path, judge, cache_dir=cache_dir, force_recompute=True
-        )
+        preprocess_database(db_path, judge, cache_dir=cache_dir, force_recompute=True)
         assert judge.calls == 2
 
     def test_no_cache_dir_runs_judge_every_time(self, tmp_path):
@@ -608,6 +608,18 @@ class TestBuildAtomicFilterMessages:
 # ===========================================================================
 
 
+@pytest.fixture
+def fake_requests(monkeypatch):
+    """Inject a fake `requests` module into sys.modules.
+
+    CI does not install real requests, and VLLMJudgeClient.__init__ does
+    `import requests`. A MagicMock stands in without any real HTTP dep.
+    """
+    fake = MagicMock()
+    monkeypatch.setitem(sys.modules, "requests", fake)
+    return fake
+
+
 class TestVLLMJudgeClient:
     def _build_client(self, **overrides):
         # The module stores a reference to the `requests` module in
@@ -624,31 +636,29 @@ class TestVLLMJudgeClient:
         client._requests = MagicMock()
         return client
 
-    def test_base_url_is_stripped_of_trailing_slash(self):
+    def test_base_url_is_stripped_of_trailing_slash(self, fake_requests):
         client = self._build_client(base_url="http://host/")
         assert client.base_url == "http://host"
 
-    def test_api_key_from_kwarg_wins(self):
+    def test_api_key_from_kwarg_wins(self, fake_requests):
         client = self._build_client(api_key="secret-key")
         assert client.api_key == "secret-key"
 
-    def test_api_key_from_env_when_not_provided(self, monkeypatch):
+    def test_api_key_from_env_when_not_provided(self, fake_requests, monkeypatch):
         monkeypatch.setenv("VLLM_API_KEY", "env-key")
         client = VLLMJudgeClient(base_url="http://x", model="m")
         assert client.api_key == "env-key"
 
-    def test_api_key_default_when_no_source(self, monkeypatch):
+    def test_api_key_default_when_no_source(self, fake_requests, monkeypatch):
         monkeypatch.delenv("VLLM_API_KEY", raising=False)
         client = VLLMJudgeClient(base_url="http://x", model="m")
         assert client.api_key == "not-needed"
 
-    def test_filter_atomic_posts_to_chat_completions_endpoint(self):
+    def test_filter_atomic_posts_to_chat_completions_endpoint(self, fake_requests):
         client = self._build_client(base_url="http://host:9000")
         response = MagicMock()
         response.json.return_value = {
-            "choices": [
-                {"message": {"content": json.dumps(_sample_groups_payload())}}
-            ]
+            "choices": [{"message": {"content": json.dumps(_sample_groups_payload())}}]
         }
         client._requests.post.return_value = response
 
@@ -670,7 +680,7 @@ class TestVLLMJudgeClient:
         # Parses the response.
         assert result["unmerged"] == [4]
 
-    def test_filter_atomic_raises_on_http_error(self):
+    def test_filter_atomic_raises_on_http_error(self, fake_requests):
         client = self._build_client()
         response = MagicMock()
         response.raise_for_status.side_effect = RuntimeError("500 Internal")
@@ -678,7 +688,7 @@ class TestVLLMJudgeClient:
         with pytest.raises(RuntimeError, match="500"):
             client.filter_atomic([("A", "R", "B")])
 
-    def test_filter_atomic_validates_response_shape(self):
+    def test_filter_atomic_validates_response_shape(self, fake_requests):
         """Malformed LLM content should raise through parse_atomic_filter_response."""
         client = self._build_client()
         response = MagicMock()
@@ -738,7 +748,9 @@ class TestParseAtomicFilterResponseExtra:
 
     def test_group_missing_required_key_raises(self):
         payload = {
-            "groups": [{"group_id": 0, "member_indices": [0]}],  # no canonical_triplet_id
+            "groups": [
+                {"group_id": 0, "member_indices": [0]}
+            ],  # no canonical_triplet_id
             "unmerged": [],
         }
         with pytest.raises(ValueError, match="canonical_triplet_id"):
