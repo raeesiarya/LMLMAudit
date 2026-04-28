@@ -1,5 +1,6 @@
 import argparse
 import csv
+import dataclasses
 import html
 import json
 import os
@@ -547,7 +548,8 @@ def parse_args() -> argparse.Namespace:
         choices=["on", "off"],
         help="Enable or disable Weights & Biases logging.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    return args
 
 
 def main() -> None:
