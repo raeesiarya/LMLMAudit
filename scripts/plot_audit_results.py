@@ -256,9 +256,10 @@ def plot_domain_variant_state_accuracy(
         percent_axis(ax)
 
     axes[0].set_ylabel("Weighted exact match")
+    fig.subplots_adjust(top=0.78, bottom=0.18, wspace=0.20)
     fig.suptitle("Exact Match by Domain, Database Variant, and State", y=0.98)
     handles, labels = axes[-1].get_legend_handles_labels()
-    fig.legend(handles, labels, frameon=False, ncol=3, loc="upper center", bbox_to_anchor=(0.5, 0.94))
+    fig.legend(handles, labels, frameon=False, ncol=3, loc="upper center", bbox_to_anchor=(0.5, 0.90))
     save_figure(fig, output_dir, "exact_match_by_domain_variant_state", tight=False)
 
 
