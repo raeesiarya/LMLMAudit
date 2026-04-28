@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
+import sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -12,11 +14,18 @@ _MPL_CONFIG_DIR = Path("/tmp/lmlm-audit-matplotlib")
 _MPL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("MPLCONFIGDIR", str(_MPL_CONFIG_DIR))
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_DIR = PROJECT_ROOT / "src" / "lmlm-audit"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+
+from metrics import metrics_total
 
 
 STATE_ORDER = ["FULL", "DEL-ON", "DEL-OFF"]
@@ -36,6 +45,7 @@ VARIANT_LABELS = {
     "alias": "Alias",
     "collision": "Collision",
     "noise": "Noise",
+    "released_lmlm": "Released LMLM",
 }
 DOMAIN_ORDER = ["countries", "politicians", "sports"]
 DOMAIN_LABELS = {
@@ -62,6 +72,8 @@ PROMPT_LABELS = {
 METRIC_LABELS = {
     "exact_match": "Exact match",
     "contains_match": "Contains match",
+    "precision": "Precision",
+    "recall": "Recall",
     "f1": "Token F1",
     "unknown_rate": "Unknown rate",
     "parametric_leakage": "Parametric leakage",
@@ -83,6 +95,24 @@ DECOMPOSITION_COLORS = {
 def read_csv(path: Path) -> list[dict[str, str]]:
     with path.open(newline="") as f:
         return list(csv.DictReader(f))
+
+
+def read_jsonl(path: Path) -> list[dict[str, object]]:
+    with path.open(encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+def read_released_lmlm_metrics(paths: list[Path]) -> dict[str, float] | None:
+    existing_paths = [path for path in paths if path.exists()]
+    if not existing_paths:
+        return None
+
+    results: list[dict[str, object]] = []
+    for path in existing_paths:
+        results.extend(read_jsonl(path))
+    if not results:
+        return None
+    return metrics_total(results)
 
 
 def add_derived_columns(row: dict[str, str]) -> dict[str, str]:
@@ -347,6 +377,103 @@ def plot_retrieval_decomposition(
     save_figure(fig, output_dir, "retrieval_decomposition_by_domain_variant")
 
 
+def plot_cross_state_diagnostic_by_variant(
+    cross_state_rows: list[dict[str, str]],
+    output_dir: Path,
+    metric: str,
+    color: str,
+    stem: str,
+    released_lmlm_metrics: dict[str, float] | None = None,
+) -> None:
+    variants = ordered_values({row["variant"] for row in cross_state_rows}, VARIANT_ORDER)
+    grouped = group_rows(cross_state_rows, ("variant",))
+    labels = [pretty_variant(variant) for variant in variants]
+    values = [
+        weighted_average(grouped.get((variant,), []), metric)
+        for variant in variants
+    ]
+
+    if released_lmlm_metrics is not None:
+        labels.append(pretty_variant("released_lmlm"))
+        values.append(released_lmlm_metrics[metric])
+
+    max_value = max(values)
+    upper = max(0.02, min(1.0, np.ceil((max_value + 0.01) * 20) / 20))
+
+    x = np.arange(len(labels))
+    colors = [color] * len(labels)
+    if released_lmlm_metrics is not None:
+        colors[-1] = "#64748b"
+
+    fig, ax = plt.subplots(figsize=(8.8, 5.2))
+    bars = ax.bar(x, values, color=colors, width=0.62)
+    ax.set_title(f"Average {METRIC_LABELS[metric]} Across Databases")
+    ax.set_ylabel("Weighted rate")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=20, ha="right")
+    percent_axis(ax, upper=upper)
+    for bar, value in zip(bars, values, strict=True):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            value + upper * 0.02,
+            f"{value * 100:.1f}%",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
+    save_figure(fig, output_dir, stem)
+
+
+def default_released_result_paths(output_dir: Path) -> list[Path]:
+    return sorted(output_dir.glob("prompts_*_results.jsonl"))
+
+
+def plot_overlap_metrics_by_prompt_state(
+    per_state_rows: list[dict[str, str]],
+    output_dir: Path,
+) -> None:
+    prompts = ordered_values(
+        {row["prompt_type"] for row in per_state_rows},
+        PROMPT_ORDER,
+    )
+    metrics = ["precision", "recall", "f1"]
+    grouped = group_rows(per_state_rows, ("prompt_type", "state"))
+    x = np.arange(len(prompts))
+    width = 0.24
+
+    fig, axes = plt.subplots(
+        1,
+        len(metrics),
+        figsize=(16, 5.2),
+        sharey=True,
+        constrained_layout=False,
+    )
+    for ax, metric in zip(axes, metrics, strict=True):
+        for idx, state in enumerate(STATE_ORDER):
+            values = [
+                weighted_average(grouped.get((prompt, state), []), metric)
+                for prompt in prompts
+            ]
+            ax.bar(
+                x + (idx - 1) * width,
+                values,
+                width,
+                color=STATE_COLORS[state],
+                label=STATE_LABELS[state],
+            )
+        ax.set_title(METRIC_LABELS[metric])
+        ax.set_xticks(x)
+        ax.set_xticklabels([pretty_prompt(prompt) for prompt in prompts], rotation=30, ha="right")
+        percent_axis(ax)
+
+    axes[0].set_ylabel("Weighted rate")
+    handles, labels = axes[-1].get_legend_handles_labels()
+    fig.subplots_adjust(top=0.76, bottom=0.24, wspace=0.12)
+    fig.suptitle("Average Precision, Recall, and F1 by Prompt Style and State", y=0.98)
+    fig.legend(handles, labels, frameon=False, ncol=3, loc="upper center", bbox_to_anchor=(0.5, 0.90))
+    save_figure(fig, output_dir, "precision_recall_f1_by_prompt_and_state", tight=False)
+
+
 def annotate_heatmap(ax: plt.Axes, values: np.ndarray) -> None:
     for row_idx in range(values.shape[0]):
         for col_idx in range(values.shape[1]):
@@ -418,6 +545,9 @@ def write_plot_index(output_dir: Path) -> None:
         "- `exact_match_by_domain_variant_state`: exact-match rates split by domain and database perturbation.",
         "- `accuracy_drop_after_deletion_by_prompt`: how much exact-match accuracy falls after deleting facts.",
         "- `retrieval_decomposition_by_domain_variant`: side-by-side leakage, retrieval-mediated correctness, and retrieval-artifact rates.",
+        "- `average_parametric_leakage_by_domain_variant`: average leakage rates by database variant, with released LMLM comparison when raw results are available.",
+        "- `average_retrieval_artifact_rate_by_domain_variant`: average artifact rates by database variant, with released LMLM comparison when raw results are available.",
+        "- `precision_recall_f1_by_prompt_and_state`: token-overlap metrics split by prompt style and intervention state.",
         "- `deletion_diagnostics_prompt_variant_heatmaps`: compact view of leakage, retrieval-mediated correctness, and artifacts by prompt and database variant.",
         "",
         "Each plot is saved as both `.png` and `.pdf`.",
@@ -446,6 +576,17 @@ def parse_args() -> argparse.Namespace:
         default=Path("outputs/audit/plots"),
         help="Directory for generated plots.",
     )
+    parser.add_argument(
+        "--released-result-files",
+        type=Path,
+        nargs="*",
+        default=None,
+        help=(
+            "Optional raw result JSONL files generated from "
+            "`data/released_database/lmlm_database.json` and its prompts. "
+            "Defaults to `outputs/audit/prompts_*_results.jsonl`."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -455,12 +596,35 @@ def main() -> None:
 
     per_state_rows = [add_derived_columns(row) for row in read_csv(args.per_state)]
     cross_state_rows = [add_derived_columns(row) for row in read_csv(args.cross_state)]
+    released_result_paths = (
+        args.released_result_files
+        if args.released_result_files is not None
+        else default_released_result_paths(args.cross_state.parent)
+    )
+    released_lmlm_metrics = read_released_lmlm_metrics(released_result_paths)
 
     plot_overall_metrics(per_state_rows, args.output_dir)
     plot_prompt_state_accuracy(per_state_rows, args.output_dir)
     plot_domain_variant_state_accuracy(per_state_rows, args.output_dir)
     plot_deletion_drop_by_prompt(per_state_rows, args.output_dir)
     plot_retrieval_decomposition(cross_state_rows, args.output_dir)
+    plot_cross_state_diagnostic_by_variant(
+        cross_state_rows,
+        args.output_dir,
+        metric="parametric_leakage",
+        color=DECOMPOSITION_COLORS["parametric_leakage"],
+        stem="average_parametric_leakage_by_domain_variant",
+        released_lmlm_metrics=released_lmlm_metrics,
+    )
+    plot_cross_state_diagnostic_by_variant(
+        cross_state_rows,
+        args.output_dir,
+        metric="retrieval_artifact_rate",
+        color=DECOMPOSITION_COLORS["retrieval_artifact_rate"],
+        stem="average_retrieval_artifact_rate_by_domain_variant",
+        released_lmlm_metrics=released_lmlm_metrics,
+    )
+    plot_overlap_metrics_by_prompt_state(per_state_rows, args.output_dir)
     plot_prompt_heatmaps(cross_state_rows, args.output_dir)
     write_plot_index(args.output_dir)
 
