@@ -15,7 +15,6 @@ from tqdm import tqdm
 from metrics import metrics_total
 from database_states import DatabaseState, build_state_db_manager, retrieval_enabled
 from equivalence import prompt_row_aliases
-from llm_preprocessing import VLLMJudgeClient, preprocess_database_to_file
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -549,37 +548,7 @@ def parse_args() -> argparse.Namespace:
         choices=["on", "off"],
         help="Enable or disable Weights & Biases logging.",
     )
-    parser.add_argument(
-        "--preprocessing",
-        action="store_true",
-        default=False,
-        help=("Run LLM-based atomic-filter preprocessing on each DB before auditing."),
-    )
-    parser.add_argument(
-        "--preprocess-cache-dir",
-        type=Path,
-        default=None,
-        help=(
-            "Directory where LLM-filtered DBs are cached. Defaults to "
-            "<output-dir>/preprocessed. Filtered DBs (and their group "
-            "judgments) are reused across runs unless the source DB changes."
-        ),
-    )
-    parser.add_argument(
-        "--judge-base-url",
-        type=str,
-        default="http://localhost:8000",
-        help="OpenAI-compatible endpoint (vLLM serve) for the atomic-filter judge.",
-    )
-    parser.add_argument(
-        "--judge-model",
-        type=str,
-        default="meta-llama/Llama-3.3-70B-Instruct",
-        help="Judge model name served at --judge-base-url.",
-    )
     args = parser.parse_args()
-    if args.preprocess_cache_dir is None:
-        args.preprocess_cache_dir = args.output_dir / "preprocessed"
     return args
 
 
@@ -609,44 +578,6 @@ def main() -> None:
         jobs_by_database: dict[Path, list[AuditJob]] = defaultdict(list)
         for job in jobs:
             jobs_by_database[job.database_path].append(job)
-
-        if args.preprocessing:
-            logger.print(
-                "LLM atomic-filter preprocessing enabled. Base URL: "
-                f"{args.judge_base_url}, model: {args.judge_model}. "
-                f"Cache dir: {args.preprocess_cache_dir}"
-            )
-            judge = VLLMJudgeClient(
-                base_url=args.judge_base_url,
-                model=args.judge_model,
-            )
-            preprocess_map: dict[Path, Path] = {}
-            for database_path in list(jobs_by_database.keys()):
-                db_path = Path(database_path)
-                filtered_output_path = (
-                    args.preprocess_cache_dir / db_path.parent.name / db_path.name
-                )
-                logger.print(f"Preprocessing {db_path} -> {filtered_output_path}")
-                preprocess_database_to_file(
-                    db_path=db_path,
-                    judge=judge,
-                    output_path=filtered_output_path,
-                )
-                preprocess_map[database_path] = filtered_output_path
-
-            rebuilt_jobs_by_database: dict[Path, list[AuditJob]] = defaultdict(list)
-            for original_database_path, job_list in jobs_by_database.items():
-                new_database_path = preprocess_map[original_database_path]
-                logger.print(
-                    f"Remapping audit database {original_database_path} -> "
-                    f"{new_database_path}"
-                )
-                for job in job_list:
-                    rebuilt_job = dataclasses.replace(
-                        job, database_path=new_database_path
-                    )
-                    rebuilt_jobs_by_database[new_database_path].append(rebuilt_job)
-            jobs_by_database = rebuilt_jobs_by_database
 
         cross_state_rows: list[dict[str, Any]] = []
         per_state_rows: list[dict[str, Any]] = []
