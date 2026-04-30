@@ -25,7 +25,9 @@ from run_audit import (
     choose_answer,
     clean_answer,
     compute_generation_budget,
+    discover_all_audit_jobs,
     discover_custom_audit_jobs,
+    discover_released_audit_jobs,
     extract_lookup_values,
     generate_answer,
     infer_prompt_paths_for_database,
@@ -1038,6 +1040,92 @@ class TestDiscoverCustomAuditJobs:
         assert discover_custom_audit_jobs(tmp_path / "out") == []
 
 
+class TestDiscoverReleasedAuditJobs:
+    def _build_released(self, root: Path, prompt_files: list[str]) -> Path:
+        root.mkdir(parents=True)
+        (root / "lmlm_database.json").write_text("{}", encoding="utf-8")
+        prompts_dir = root / "prompts"
+        prompts_dir.mkdir()
+        for name in prompt_files:
+            (prompts_dir / name).write_text("", encoding="utf-8")
+        return root
+
+    def test_discovers_all_prompt_files(self, tmp_path, monkeypatch):
+        root = tmp_path / "released_database"
+        self._build_released(root, ["prompts_a.jsonl", "prompts_b.jsonl"])
+        monkeypatch.setattr(run_audit, "DEFAULT_RELEASED_DATABASE_DIR", root)
+
+        jobs = discover_released_audit_jobs(tmp_path / "out")
+
+        assert sorted(j.prompt_path.name for j in jobs) == [
+            "prompts_a.jsonl",
+            "prompts_b.jsonl",
+        ]
+        assert all(j.database_path == root / "lmlm_database.json" for j in jobs)
+        # Output nests under released_database/lmlm_database/<stem>.
+        assert all(
+            j.output_path
+            == tmp_path
+            / "out"
+            / "released_database"
+            / "lmlm_database"
+            / f"{j.prompt_path.stem}_results.jsonl"
+            for j in jobs
+        )
+
+    def test_returns_empty_when_dir_missing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            run_audit,
+            "DEFAULT_RELEASED_DATABASE_DIR",
+            tmp_path / "does_not_exist",
+        )
+        assert discover_released_audit_jobs(tmp_path / "out") == []
+
+    def test_returns_empty_when_database_missing(self, tmp_path, monkeypatch):
+        root = tmp_path / "released_database"
+        root.mkdir()
+        (root / "prompts").mkdir()
+        (root / "prompts" / "p.jsonl").write_text("", encoding="utf-8")
+        monkeypatch.setattr(run_audit, "DEFAULT_RELEASED_DATABASE_DIR", root)
+        # No lmlm_database.json present → skip.
+        assert discover_released_audit_jobs(tmp_path / "out") == []
+
+    def test_returns_empty_when_prompts_dir_missing(self, tmp_path, monkeypatch):
+        root = tmp_path / "released_database"
+        root.mkdir()
+        (root / "lmlm_database.json").write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(run_audit, "DEFAULT_RELEASED_DATABASE_DIR", root)
+        # No prompts/ present → skip.
+        assert discover_released_audit_jobs(tmp_path / "out") == []
+
+
+class TestDiscoverAllAuditJobs:
+    def test_combines_custom_and_released(self, tmp_path, monkeypatch):
+        custom_root = tmp_path / "custom_databases"
+        domain = custom_root / "countries"
+        (domain / "prompts" / "alias").mkdir(parents=True)
+        (domain / "alias.json").write_text("{}", encoding="utf-8")
+        (domain / "prompts" / "alias" / "p1.jsonl").write_text("", encoding="utf-8")
+
+        released_root = tmp_path / "released_database"
+        released_root.mkdir()
+        (released_root / "lmlm_database.json").write_text("{}", encoding="utf-8")
+        (released_root / "prompts").mkdir()
+        (released_root / "prompts" / "p2.jsonl").write_text("", encoding="utf-8")
+
+        monkeypatch.setattr(run_audit, "DEFAULT_CUSTOM_DATABASE_DIR", custom_root)
+        monkeypatch.setattr(run_audit, "DEFAULT_RELEASED_DATABASE_DIR", released_root)
+
+        jobs = discover_all_audit_jobs(tmp_path / "out")
+        prompt_names = sorted(j.prompt_path.name for j in jobs)
+        assert prompt_names == ["p1.jsonl", "p2.jsonl"]
+        databases = {j.database_path for j in jobs}
+        assert databases == {
+            domain / "alias.json",
+            released_root / "lmlm_database.json",
+        }
+
+
 class TestInferPromptPathsForDatabase:
     def test_returns_matching_jsonl_files(self, tmp_path):
         db = tmp_path / "countries" / "alias.json"
@@ -1111,8 +1199,11 @@ class TestResolveAuditJobs:
     ):
         root = tmp_path / "custom_databases"
         root.mkdir()
-        # Point the loader at an empty custom_databases.
+        released = tmp_path / "released_database"
+        released.mkdir()
+        # Point the loader at empty custom_databases / released_database.
         monkeypatch.setattr(run_audit, "DEFAULT_CUSTOM_DATABASE_DIR", root)
+        monkeypatch.setattr(run_audit, "DEFAULT_RELEASED_DATABASE_DIR", released)
         args = self._args(output_dir=tmp_path / "out")
         assert resolve_audit_jobs(args) == []
 
@@ -1124,9 +1215,12 @@ class TestResolveAuditJobs:
         db.write_text("{}", encoding="utf-8")
         root = tmp_path / "custom_databases"
         root.mkdir()
+        released = tmp_path / "released_database"
+        released.mkdir()
         monkeypatch.setattr(run_audit, "DEFAULT_CUSTOM_DATABASE_DIR", root)
+        monkeypatch.setattr(run_audit, "DEFAULT_RELEASED_DATABASE_DIR", released)
         args = self._args(database_path=db, output_dir=tmp_path / "out")
-        # Falls through to discover_custom_audit_jobs → empty.
+        # Falls through to discover_all_audit_jobs → empty.
         assert resolve_audit_jobs(args) == []
 
 

@@ -20,6 +20,7 @@ from equivalence import prompt_row_aliases
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PROMPT_DIR = Path("data/prompts")
 DEFAULT_CUSTOM_DATABASE_DIR = Path("data/custom_databases")
+DEFAULT_RELEASED_DATABASE_DIR = Path("data/released_database")
 DEFAULT_OUTPUT_DIR = Path("outputs/audit")
 DEFAULT_DATABASE_PATH = Path("data/lmlm_database.json")
 WANDB_PROJECT = "lmlm-audit"
@@ -360,6 +361,8 @@ class AuditLogger:
 
 def discover_custom_audit_jobs(output_dir: Path) -> list[AuditJob]:
     jobs: list[AuditJob] = []
+    if not DEFAULT_CUSTOM_DATABASE_DIR.exists():
+        return jobs
     for domain_dir in sorted(
         path for path in DEFAULT_CUSTOM_DATABASE_DIR.iterdir() if path.is_dir()
     ):
@@ -386,6 +389,36 @@ def discover_custom_audit_jobs(output_dir: Path) -> list[AuditJob]:
                     )
                 )
     return jobs
+
+
+def discover_released_audit_jobs(output_dir: Path) -> list[AuditJob]:
+    jobs: list[AuditJob] = []
+    if not DEFAULT_RELEASED_DATABASE_DIR.exists():
+        return jobs
+
+    database_path = DEFAULT_RELEASED_DATABASE_DIR / "lmlm_database.json"
+    prompts_dir = DEFAULT_RELEASED_DATABASE_DIR / "prompts"
+    if not database_path.exists() or not prompts_dir.exists():
+        return jobs
+
+    for prompt_path in sorted(prompts_dir.glob("*.jsonl")):
+        jobs.append(
+            AuditJob(
+                prompt_path=prompt_path,
+                database_path=database_path,
+                output_path=output_dir
+                / DEFAULT_RELEASED_DATABASE_DIR.name
+                / database_path.stem
+                / f"{prompt_path.stem}_results.jsonl",
+            )
+        )
+    return jobs
+
+
+def discover_all_audit_jobs(output_dir: Path) -> list[AuditJob]:
+    return discover_custom_audit_jobs(output_dir) + discover_released_audit_jobs(
+        output_dir
+    )
 
 
 def infer_prompt_paths_for_database(database_path: Path) -> list[Path]:
@@ -421,7 +454,7 @@ def resolve_audit_jobs(args: argparse.Namespace) -> list[AuditJob]:
                 for prompt_path in inferred_prompt_paths
             ]
 
-    return discover_custom_audit_jobs(args.output_dir)
+    return discover_all_audit_jobs(args.output_dir)
 
 
 def setup_wandb() -> Any:
