@@ -5,10 +5,9 @@
 </p>
 
 <p align="center">
-  Hanna Roed, Arya Raeesi, Rohan Bijukumar<br>
+  Hanna Roed, Arya Raeesi<br>
   <a href="mailto:hanna.roed@berkeley.edu">hanna.roed@berkeley.edu</a>,
-  <a href="mailto:aryaraeesi@berkeley.edu">aryaraeesi@berkeley.edu</a>,
-  <a href="mailto:rohanbijukumar@berkeley.edu">rohanbijukumar@berkeley.edu</a>
+  <a href="mailto:aryaraeesi@berkeley.edu">aryaraeesi@berkeley.edu</a>
 </p>
 
 <p align="center">
@@ -19,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="./docs/Auditing_Forgetting_in_Limited_Memory_Language_Models.pdf">Project Proposal</a>
+  <a href="./docs/Auditing_Forgetting_in_Limited_Memory_Language_Models.pdf">Final Paper</a>
   |
   <a href="https://arxiv.org/abs/2505.15962">LMLM Paper</a>
   |
@@ -75,9 +74,13 @@ Together, these metrics distinguish true forgetting from apparent forgetting.
 - Study how leakage varies across relation type, entity popularity, and prompt formulation.
 - Build a reproducible evaluation framework for memory separation in modular and retrieval-augmented language models.
 
-## Proposed Workflow
+## Audit Pipeline
 
-The project proposal centers on the following pipeline:
+<p align="center">
+  <img src="./docs/figures/flowchart-lmlm-audit.png" alt="LMLM audit pipeline diagram" />
+</p>
+
+The final paper centers on the following pipeline:
 
 1. Draw evaluation facts directly from the released LMLM database so training, retrieval, and evaluation stay aligned.
 2. Apply verified alias-closure deletion for each target fact, removing canonical and alias-equivalent realizations of `(subject, relation, object)`.
@@ -92,17 +95,48 @@ Architectures like LMLM are appealing because they promise editable and removabl
 
 But if a deleted fact still survives in model parameters, then database deletion alone may not constitute true forgetting. This project is designed to test that boundary directly.
 
+## Results
+
+The audit pipeline produces a set of complementary measurements over the cross product of prompt style, database variant, and inference state. The figures below summarize the headline findings reported in the final paper.
+
+The first figure decomposes DEL-ON correctness across the six prompt styles. Across every style, retrieval-mediated correctness $R(f)$ dominates while parametric leakage $L(f)$ stays close to zero, indicating that when the model still answers correctly after deletion it is almost always relying on the retrieval channel rather than residual parameter memory. The retrieval artifact rate tracks closely with retrieval-mediated correctness, which suggests that a substantial portion of post-deletion correctness is recovered without an explicit gold-equivalent retrieval entry in the trace.
+
+<p align="center">
+  <img src="./docs/figures/del_on_correctness_attribution_by_prompt.png" alt="DEL-ON correctness attribution by prompt style" />
+</p>
+
+The second figure decomposes the same quantities across database variants. The Released LMLM database produces almost no DEL-ON correctness once the target fact is removed, while alias, collision, and noise variants exhibit progressively higher artifact-driven correctness. The noise variant in particular reaches roughly 13.6 percent retrieval-mediated correctness, illustrating how distractor entries can elevate apparent accuracy after deletion even when the gold fact is no longer in the database.
+
+<p align="center">
+  <img src="./docs/figures/del_on_correctness_attribution_by_variant.png" alt="DEL-ON correctness attribution by database variant" />
+</p>
+
+Finally, token-level F1 across `FULL`, `DEL-ON`, and `DEL-OFF` makes the role of retrieval explicit. `FULL` F1 ranges from roughly 18 to 57 percent depending on prompt style, `DEL-ON` drops to single-digit territory, and `DEL-OFF` collapses to nearly zero across every prompt style. This pattern is consistent with retrieval doing the heavy lifting and the model parameters carrying very little residual factual signal once the database entry is removed.
+
+<p align="center">
+  <img src="./docs/figures/token_f1_by_prompt_and_state.png" alt="Token F1 by prompt style and inference state" />
+</p>
+
+## Acknowledgements
+
+We thank Akshat Gupta (Ph.D. student, UC Berkeley) for ongoing research feedback and direction; Yilun Hua (Ph.D. student, Cornell University) for further research feedback and direction on the LMLM framework; and Marcel Roed (Ph.D. student, Stanford University) for early feedback on the project proposal. This work used computing resources provided by Berkeley Research Computing through the Compton Spectrometer and Imager (COSI) mission (NASA Small Explorers (SMEX) Program).
+
 ## References
 
-- Linxi Zhao et al. *Pre-training Limited Memory Language Models with Internal and External Knowledge*. 2025.
-- Kevin Meng et al. *Locating and Editing Factual Associations in GPT*. NeurIPS 2022.
-- Nicholas Carlini et al. *Extracting Training Data from Large Language Models*. USENIX Security 2021.
-- Patrick Lewis et al. *Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks*. NeurIPS 2020.
-- Kelvin Guu et al. *REALM: Retrieval-Augmented Language Model Pre-Training*. ICML 2020.
-
-## Acknowledgments
-
-This project builds on the LMLM framework and the public release from the original authors. Their work provides both the motivation and the foundation for this audit.
+- Bourtoule, L., Chandrasekaran, V., Choquette-Choo, C. A., Jia, H., Travers, A., Zhang, B., Lie, D., and Papernot, N. Machine unlearning. In *Proceedings of the 42nd IEEE Symposium on Security and Privacy*, 2021. [arXiv:1912.03817](https://arxiv.org/abs/1912.03817).
+- Carlini, N., Tramer, F., Wallace, E., Jagielski, M., Herbert-Voss, A., Lee, K., Roberts, A., Brown, T. B., Song, D., Erlingsson, Ú., Oprea, A., and Raffel, C. Extracting training data from large language models. In *USENIX Security Symposium*, 2021. [arXiv:2012.07805](https://arxiv.org/abs/2012.07805).
+- Guu, K., Lee, K., Tung, Z., Pasupat, P., and Chang, M.-W. REALM: Retrieval-augmented language model pre-training. In *International Conference on Machine Learning*, 2020. [arXiv:2002.08909](https://arxiv.org/abs/2002.08909).
+- Karpukhin, V., Oğuz, B., Min, S., Lewis, P., Wu, L., Edunov, S., Chen, D., and Yih, W.-t. Dense passage retrieval for open-domain question answering. In *Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP)*, 2020. [arXiv:2004.04906](https://arxiv.org/abs/2004.04906).
+- Lewis, P., Perez, E., Piktus, A., Petroni, F., Karpukhin, V., Goyal, N., Küttler, H., Lewis, M., Yih, W.-t., Rocktäschel, T., Riedel, S., and Kiela, D. Retrieval-augmented generation for knowledge-intensive NLP tasks. In *Advances in Neural Information Processing Systems*, 2020. [arXiv:2005.11401](https://arxiv.org/abs/2005.11401).
+- Lizzo, T. and Heck, L. Unlearning in LLMs: Methods, evaluation, and open challenges, 2026. [arXiv:2601.13264](https://arxiv.org/abs/2601.13264).
+- Maini, P., Feng, Z., Schwarzschild, A., Lipton, Z. C., and Kolter, J. Z. TOFU: A task of fictitious unlearning for LLMs, 2024. [arXiv:2401.06121](https://arxiv.org/abs/2401.06121).
+- Mallen, A., Asai, A., Zhong, V., Das, R., Khashabi, D., and Hajishirzi, H. When not to trust language models: Investigating effectiveness of parametric and non-parametric memories. In *Proceedings of the 61st Annual Meeting of the Association for Computational Linguistics (ACL)*, 2023. [arXiv:2212.10511](https://arxiv.org/abs/2212.10511).
+- Meng, K., Bau, D., Andonian, A., and Belinkov, Y. Locating and editing factual associations in GPT. In *Advances in Neural Information Processing Systems*, 2022. [arXiv:2202.05262](https://arxiv.org/abs/2202.05262).
+- Meng, K., Sharma, A. S., Andonian, A., Belinkov, Y., and Bau, D. Mass-editing memory in a transformer. In *International Conference on Learning Representations*, 2023. [arXiv:2210.07229](https://arxiv.org/abs/2210.07229).
+- Min, S., Krishna, K., Lyu, X., Lewis, M., Yih, W.-t., Koh, P. W., Iyyer, M., Zettlemoyer, L., and Hajishirzi, H. FactScore: Fine-grained atomic evaluation of factual precision in long form text generation. In *Empirical Methods in Natural Language Processing (EMNLP)*, 2023. [arXiv:2305.14251](https://arxiv.org/abs/2305.14251).
+- Yao, Y., Wang, P., Tian, B., Cheng, S., Li, Z., Deng, S., Chen, H., and Zhang, N. Editing large language models: Problems, methods, and opportunities. In *Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing (EMNLP)*, 2023. [arXiv:2305.13172](https://arxiv.org/abs/2305.13172).
+- Zhao, L. and contributors. LMLM. [github.com/kilian-group/LMLM](https://github.com/kilian-group/LMLM), 2025. Commit 9be34b7.
+- Zhao, L., Zalouk, S., Belardi, C. K., Lovelace, J., Zhou, J. P., Noonan, R. T., Go, D., Weinberger, K. Q., Artzi, Y., and Sun, J. J. Pre-training limited memory language models with internal and external knowledge, 2025. [arXiv:2505.15962](https://arxiv.org/abs/2505.15962).
 
 ## License
 
