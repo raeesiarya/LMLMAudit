@@ -29,6 +29,7 @@ jobs:
           python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
 
       - name: Run unit tests with coverage
+        id: tests
         run: |
           pytest \
             --cov=src/lmlm-audit \
@@ -83,9 +84,18 @@ jobs:
           color: ${{ steps.coverage.outputs.color }}
           path: badges/coverage.svg
 
-      - name: Commit coverage badge
-        if: github.event_name == 'push'
+      - name: Generate tests badge
+        if: always() && github.event_name == 'push'
+        uses: emibcn/badge-action@v2
+        with:
+          label: tests
+          status: ${{ steps.tests.outcome == 'success' && 'passing' || 'failing' }}
+          color: ${{ steps.tests.outcome == 'success' && 'brightgreen' || 'red' }}
+          path: badges/tests.svg
+
+      - name: Commit badges
+        if: always() && github.event_name == 'push'
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "chore(ci): update coverage badge"
-          file_pattern: badges/coverage.svg
+          commit_message: "chore(ci): update status badges"
+          file_pattern: badges/coverage.svg badges/tests.svg

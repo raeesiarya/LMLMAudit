@@ -14,11 +14,12 @@
 </p>
 
 <p align="center">
+  <img src="./badges/tests.svg" alt="Tests badge" />
   <img src="./badges/coverage.svg" alt="Coverage badge" />
 </p>
 
 <p align="center">
-  <a href="./docs/Auditing_Forgetting_in_Limited_Memory_Language_Models.pdf">Final Paper</a>
+  <a href="https://arxiv.org/abs/2607.00605">Final Paper</a>
   |
   <a href="https://arxiv.org/abs/2505.15962">LMLM Paper</a>
   |
@@ -89,11 +90,28 @@ The final paper centers on the following pipeline:
 5. Log retrieval traces during inference to determine whether correctness is supported by explicit database evidence.
 6. Aggregate leakage, retrieval-mediated correctness, and artifact rates across fact categories.
 
-## Why This Matters
+## Running the Audit
 
-Architectures like LMLM are appealing because they promise editable and removable knowledge without retraining. If that promise holds, they could support more reliable factual updates, deletion requests, and governance workflows.
+First create the environment. This project uses [uv](https://docs.astral.sh/uv/), which resolves the dependencies (including the local `lmlm` package referenced from `../LMLM`) and builds the virtual environment in `.venv`.
 
-But if a deleted fact still survives in model parameters, then database deletion alone may not constitute true forgetting. This project is designed to test that boundary directly.
+```bash
+uv sync
+```
+
+Then run the audit:
+
+```bash
+uv run python src/lmlm-audit/run_audit.py \
+  --database-path data/custom_databases/countries/base.json \
+  --prompt-files data/custom_databases/countries/prompts/base/prompts_direct_questions.jsonl \
+  --max-new-tokens 12 \
+  --limit 200 \
+  --states FULL DEL-ON \
+  --output-dir outputs/audit \
+  --wandb_activation off # set up a .env file & API key for activating Weights & Biases
+```
+
+To audit the released LMLM database instead, point `--database-path` at `data/released_database/lmlm_database.json` and its sibling prompts under `data/released_database/prompts/`.
 
 ## Results
 
@@ -120,6 +138,23 @@ Finally, token-level F1 across `FULL`, `DEL-ON`, and `DEL-OFF` makes the role of
 ## Acknowledgements
 
 We thank Akshat Gupta (Ph.D. student, UC Berkeley) for ongoing research feedback and direction; Yilun Hua (Ph.D. student, Cornell University) for further research feedback and direction on the LMLM framework; and Marcel Roed (Ph.D. student, Stanford University) for early feedback on the project proposal. This work used computing resources provided by Berkeley Research Computing through the Compton Spectrometer and Imager (COSI) mission (NASA Small Explorers (SMEX) Program).
+
+## Citation
+
+If you use this work, please cite:
+
+```bibtex
+@misc{lmlmauditing,
+  title         = {Auditing Forgetting in Limited Memory Language Models},
+  author        = {Raeesi, Arya and Roed, Hanna},
+  year          = {2026},
+  eprint        = {2607.00605},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CL},
+  url           = {https://arxiv.org/abs/2607.00605},
+  doi           = {10.48550/arXiv.2607.00605}
+}
+```
 
 ## References
 
